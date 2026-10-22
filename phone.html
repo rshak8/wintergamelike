@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Phone preview</title>
+  <style>
+    body { margin: 0; background: #1a1d26; display: flex; gap: 30px; align-items: center; justify-content: center; height: 100vh; font-family: system-ui; color: #889; }
+    .dev { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    iframe { border: 10px solid #000; border-radius: 28px; background: #000; }
+  </style>
+</head>
+<body>
+  <!-- Dev-only preview: the game in phone-sized frames (portrait + landscape) -->
+  <div class="dev"><iframe id="p" src="./index.html" width="390" height="760"></iframe>portrait 390×760</div>
+  <div class="dev" id="lw" style="display:none"><iframe id="l" width="760" height="390"></iframe>landscape</div>
+  <script>if (location.hash === '#both') { document.getElementById('lw').style.display = ''; document.getElementById('l').src = './index.html'; }</script>
+</body>
+</html>
