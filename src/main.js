@@ -10,22 +10,29 @@ import { UI } from './ui.js';
 import { audio } from './audio.js';
 import { WEAPONS } from './config.js';
 
+// Phone-only game. Opened on a computer, it shows itself inside a phone-sized frame.
+const params = new URLSearchParams(location.search);
+const isPhone = matchMedia('(pointer: coarse)').matches;
+if (!isPhone && window.self === window.top && !params.has('full')) {
+  document.body.innerHTML = `<div id="phoneframe"><iframe src="${location.pathname}?full" title="Dungeon Knight"></iframe></div>`;
+  throw new Error('desktop: running inside a phone frame');
+}
+
 const canvas = document.getElementById('game');
-const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && innerWidth < 1100);
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: !isMobile, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, isMobile ? 1.75 : 2));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x090b13);
-scene.fog = new THREE.Fog(0x090b13, 18, 34);
+scene.background = new THREE.Color(0x07080d);
 const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 80);
 
-// Soul Knight-ish lighting: cool blue ambient, soft key, warm torches
-scene.add(new THREE.HemisphereLight(0x9fb4ff, 0x2a2440, 1.35));
-const key = new THREE.DirectionalLight(0xd8e0ff, 1.5);
+// Dungeon lighting: cool sky fill + neutral key from the top-left keep everything readable;
+// warm torch lights (LightPool) add pools of colour near the walls
+scene.add(new THREE.HemisphereLight(0xa9b8ff, 0x2a2238, 1.25));
+const key = new THREE.DirectionalLight(0xfff1e2, 1.45);
 key.position.set(-4, 10, 6);
 scene.add(key);
 scene.add(key.target);
@@ -69,6 +76,7 @@ async function boot() {
   game.start();
   let last = performance.now();
   function frame(now) {
+    if (window.__pause) { requestAnimationFrame(frame); return; }
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
     game.update(dt);
@@ -85,6 +93,16 @@ async function boot() {
     composer.render();
     last = performance.now();
   };
+  // debug: pause the loop and render a close-up of any object (for checking models and weapon grips)
+  window.__closeup = (obj, { yaw = 0, dist = 2.2, height = 0.9, look = 0.55, fov = 30 } = {}) => {
+    window.__pause = true;
+    const p = new THREE.Vector3(); obj.getWorldPosition(p);
+    const cam = camera.clone(); cam.fov = fov;
+    cam.position.set(p.x + Math.sin(yaw) * dist, p.y + height, p.z + Math.cos(yaw) * dist);
+    cam.lookAt(p.x, p.y + look, p.z); cam.updateProjectionMatrix();
+    renderer.render(scene, cam);
+  };
+  window.__resume = () => { window.__pause = false; last = performance.now(); };
   document.addEventListener('visibilitychange', () => { last = performance.now(); });
 }
 

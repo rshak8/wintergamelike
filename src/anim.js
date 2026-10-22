@@ -120,20 +120,33 @@ export class Rig {
   stop() { this.action = null; this.actionName = null; }
   punch(amount) { this.squashV += amount; }
 
-  /** Attach a weapon object to the right hand with a holder for pitch animation. basis: 'blade' | 'bow' | 'orb' */
+  /**
+   * Put a weapon in the right fist. basis: 'blade' | 'bow' | 'orb'.
+   * Weapons are modelled with the grip centre at their origin and the handle along +Y (three.js).
+   * The hand socket sits in the middle of the fist, whose hole runs forward (+Z) when the arm hangs down.
+   * The holder is the wrist: it lives in the arm's frame and pitches the weapon around the arm's X axis.
+   */
   attach(obj, basis = 'blade', hand = 'R') {
     const h = hand === 'R' ? this.handR : this.handL;
     if (!h) return;
     if (this.holder) this.holder.parent?.remove(this.holder);
     const holder = new THREE.Group();
-    h.add(holder);
-    if (basis === 'blade') obj.rotation.set(Math.PI, 0, 0);
-    else if (basis === 'bow') {
-      const m = new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 0, -1), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, -1, 0));
-      obj.quaternion.setFromRotationMatrix(m);
-    } else if (basis === 'orb') { obj.position.set(0, -0.12, 0.08); }
-    holder.add(obj);
-    this.holder = holder; this.weapon = obj; this.basis = basis;
+    holder.position.copy(h.position);
+    h.parent.add(holder);
+    const grip = new THREE.Group();
+    holder.add(grip);
+    const V = (x, y, z) => new THREE.Vector3(x, y, z);
+    if (basis === 'blade') {
+      // handle -> forward through the fist, blade width -> up (edge leads when swinging)
+      grip.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(V(0, 1, 0), V(0, 0, 1), V(1, 0, 0)));
+    } else if (basis === 'bow') {
+      // grip forward through the fist; once the arm is raised to aim, the bow stands upright with the string toward the archer
+      grip.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(V(1, 0, 0), V(0, 0, 1), V(0, -1, 0)));
+    } else if (basis === 'orb') {
+      obj.position.set(0, -0.07, 0.07); // floats just in front of the open palm
+    }
+    grip.add(obj);
+    this.holder = holder; this.grip = grip; this.weapon = obj; this.basis = basis;
   }
 
   update(dt, speed01) {
@@ -188,7 +201,8 @@ export class Rig {
     if (this.holder) {
       const target = pose.p !== undefined ? pose.p : this.idlePitch;
       this.pitch += (target - this.pitch) * Math.min(1, dt * (pose.p !== undefined ? 40 : 14));
-      this.holder.rotation.x = this.basis === 'blade' ? this.pitch : 0;
+      // pose pitch p: 0 = blade along the arm (down), -PI/2 = straight forward, -PI = straight up
+      this.holder.rotation.x = this.basis === 'blade' ? this.pitch + Math.PI / 2 : 0;
     }
     this.lean = pose.lean || 0;
     // squash spring

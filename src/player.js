@@ -57,7 +57,7 @@ export class Player {
     const m = clone(w.model);
     const basis = w.kind === 'bow' ? 'bow' : 'blade';
     this.rig.attach(m, basis);
-    this.rig.idlePitch = w.kind === 'staff' ? -2.4 : w.kind === 'bow' ? 0 : -1.7;
+    this.rig.idlePitch = w.kind === 'staff' ? -2.75 : w.kind === 'bow' ? 0 : w.model === 'W_HolyHammer' ? -2.3 : -1.7;
     this.rig.armRestR = w.kind === 'bow' ? -0.9 : -0.35;
     if (w.model === 'W_HolyHammer') m.scale.setScalar(1.25);
     if (w.model === 'W_PoisonDagger') m.scale.setScalar(1.2);

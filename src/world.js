@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { clone, instanced } from './assets.js';
 import { TEX } from './fx.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // Legend: ' ' void  '#' wall  '.' floor  T torch-wall  N banner-wall  P pillar  C crate  B barrel  S spikes
 // K crystal  b bones  z brazier  g gated door  d open door  E exit door  @ start  * chest spot  r rune
@@ -8,28 +9,38 @@ import { TEX } from './fx.js';
 const ROOM1 = [
   '##T###dd###T##',
   '#............#',
-  '#.B........C.#',
+  '#B..........C#',
   '#............#',
   'T............T',
-  '#.....r......#',
+  '#............#',
+  '#.b..........#',
+  '#......r.....#',
+  'T............T',
+  '#.........B..#',
+  '#............#',
   '#............#',
   'T............T',
-  '#.C...@....B.#',
-  '#..b.......z.#',
+  '#C....@.....B#',
+  '#.b.........z#',
+  '#............#',
   '##############',
 ];
 const ROOM2 = [
-  '##N#T#gg#T#N##',
+  '#N#T##gg##T#N#',
   '#............#',
   '#B....*.....B#',
   '#..a......a..#',
   'T............T',
-  '#....P.......#',
-  '#.......w..C.#',
-  '#..C.........#',
-  'T............T',
   '#............#',
-  '#.B.......b..#',
+  '#....P.......#',
+  '#.........C..#',
+  '#........w...#',
+  'T..C.........T',
+  '#............#',
+  '#......P.....#',
+  '#............#',
+  'T............T',
+  '#B........b..#',
   '#............#',
   '######gg######',
 ];
@@ -37,29 +48,37 @@ const ROOM3 = [
   '##T###gg###T##',
   '#B..........B#',
   '#...h........#',
-  '#..PP....PP..#',
-  'T..P......P..T',
-  '#.....*......#',
-  '#.a.......w..#',
-  '#....C..C....#',
-  'T..P......P..T',
-  '#..PP.w..PP..#',
+  '#.PP......PP.#',
+  'T.P........P.T',
   '#............#',
-  '#B...b.....B.#',
+  '#.....*......#',
+  '#a.........w.#',
+  '#............#',
+  '#....C..C....#',
+  'T............T',
+  '#.P........P.#',
+  '#.PP..w...PP.#',
+  '#............#',
+  'T............T',
+  '#B...b......B#',
   '######gg######',
 ];
 const ROOM4 = [
-  '##N#T#gg#T#N##',
+  '#N#T##gg##T#N#',
   '#............#',
-  '#.a...n...a..#',
+  '#.a...n....a.#',
   '#..B......B..#',
-  'T.....*......T',
-  '#..P......P..#',
-  '#.....K......#',
-  '#..P......P..#',
-  'T....w.......T',
-  '#..C.....h.C.#',
+  'T............T',
+  '#.....*......#',
   '#............#',
+  '#..P......P..#',
+  '#......K.....#',
+  '#..P......P..#',
+  'T............T',
+  '#....w.......#',
+  '#.C......h..C#',
+  '#............#',
+  'T............T',
   '#B...b......B#',
   '######gg######',
 ];
@@ -69,12 +88,16 @@ const ROOM5 = [
   '#.a........a.#',
   '#...SSSSSS...#',
   'T............T',
-  '#.C..*....C..#',
+  '#............#',
+  '#.C...*....C.#',
   '#...PP..PP...#',
+  '#............#',
   '#.w........w.#',
   'T............T',
   '#...SSSSSS...#',
+  '#............#',
   '#.B........B.#',
+  'T............T',
   '#............#',
   '######gg######',
 ];
@@ -82,16 +105,20 @@ const ROOM6 = [
   '##T#N#EE#N#T##',
   '#............#',
   '#.z........z.#',
-  '#.....k......#',
+  '#............#',
+  '#............#',
+  '#......k.....#',
   '#P..........P#',
   'T............T',
   '#............#',
   '#.n........n.#',
+  '#............#',
   'T............T',
   '#P..........P#',
   '#............#',
   '#............#',
   '#.z........z.#',
+  'T............T',
   '#............#',
   '######gg######',
 ];
@@ -115,18 +142,20 @@ export class World {
       p.forEach((l) => this.lines.push(l));
       row += p.length;
     });
-    this.W = 14; this.H = this.lines.length;
+    this.W = this.lines[0].length; this.H = this.lines.length;
+    this.half = this.W / 2;
     this.zOff = -(this.H - 6); // put the start room near z=0
     this.grid = new Uint8Array(this.W * this.H);
     this.props = new Map(); // cell -> prop object
     this.spikes = [];
     this.torches = [];
+    this.lights = []; // light sources picked up by the LightPool (torches are added separately)
     this.build();
   }
 
-  cx(col) { return col - 6.5; }
+  cx(col) { return col - this.half + 0.5; }
   cz(row) { return row + this.zOff; }
-  col(x) { return Math.floor(x + 7); }
+  col(x) { return Math.floor(x + this.half); }
   row(z) { return Math.floor(z - this.zOff + 0.5); }
   idx(c, r) { return r * this.W + c; }
   cell(x, z) { return [this.col(x), this.row(z)]; }
@@ -141,7 +170,7 @@ export class World {
   roomAtRow(r) { return this.rooms.find((rm) => rm && r >= rm.rowTop && r <= rm.rowBottom); }
 
   build() {
-    const floorT = [], floorB = [], walls = [], lowWalls = [], wallTint = [];
+    const floorT = [], floorB = [], walls = [], lowWalls = [], voids = [];
     const rand = mulberry(12345);
     for (let r = 0; r < this.H; r++) {
       const line = this.lines[r];
@@ -157,7 +186,7 @@ export class World {
           ((c + r) % 2 === 0 ? floorT : floorB).push({ x, z, ry: Math.floor(rand() * 4) * Math.PI / 2, color: col });
         }
         switch (ch) {
-          case ' ': t = TILE.VOID; break;
+          case ' ': t = TILE.VOID; voids.push({ x, z, low: !room }); break;
           case '#': case 'T': case 'N': case 'E': {
             t = TILE.WALL;
             if (ch === 'E') break;
@@ -166,7 +195,8 @@ export class World {
             const above = this.lines[r - 1]?.[c];
             const isBottomEdge = room && r === room.rowBottom;
             const v = 0.9 + rand() * 0.18;
-            if (isBottomEdge || (!room && false)) lowWalls.push({ x, z, sy: 0.42, color: new THREE.Color(v, v, v) });
+            // corridor walls are low too, so they never hide the room above them
+            if (isBottomEdge || !room) lowWalls.push({ x, z, sy: 0.42, color: new THREE.Color(v, v, v) });
             else walls.push({ x, z, color: new THREE.Color(v, v, v) });
             if (ch === 'T' || ch === 'N') {
               // facing: toward floor neighbour
@@ -190,7 +220,7 @@ export class World {
           case 'r': this.addRune(0, z); break;
           case '@': this.start = new THREE.Vector3(x + 0.5, 0, z); break;
           case '*': room.chest = { x: x + 0.5, z }; break;
-          case 'g': if (c === 6) this.addGate(room, x + 0.5, z, r); break;
+          case 'g': if (c === this.half - 1) this.addGate(room, x + 0.5, z, r); break;
           case 'd': break;
           case 'w': case 'a': case 'n': case 'h': case 'k':
             room.spawns.push({ type: { w: 'warrior', a: 'archer', n: 'necro', h: 'healer', k: 'king' }[ch], x, z }); break;
@@ -203,6 +233,7 @@ export class World {
     instanced('T_FloorB', floorB, this.group);
     instanced('T_Wall', walls, this.group);
     instanced('T_Wall', lowWalls, this.group);
+    this.addRock(voids);
 
     // room metadata
     for (const rm of this.rooms) {
@@ -218,8 +249,7 @@ export class World {
     this.exitDoor.position.set(0, 0, boss.zTop + 0.35);
     this.group.add(this.exitDoor);
     this.exitLeaves = [this.exitDoor.getObjectByName('T_ExitDoor_LeafL'), this.exitDoor.getObjectByName('T_ExitDoor_LeafR')];
-    const exitLight = new THREE.PointLight(0x3a8aff, 0, 7, 1.6); exitLight.position.set(0, 1.5, boss.zTop + 1.2);
-    this.group.add(exitLight); this.exitLight = exitLight;
+    this.exitLight = this.addLight(0, 1.5, boss.zTop + 1.2, 0x3a8aff, 0, 7);
     // ambient floor glows from the void edges
     this.addVoidDust();
   }
@@ -233,10 +263,9 @@ export class World {
     const p = { name, obj: o, c, r, x, z, hp: opt.breakable || 0, breakable: !!opt.breakable, room: this.roomAtRow(r) };
     this.props.set(this.idx(c, r), p);
     if (opt.glow) {
-      const g = new THREE.PointLight(opt.glow, 2.5, 5, 1.5); g.position.set(x, 1.0, z); this.group.add(g);
-      p.light = g;
+      p.light = this.addLight(x, 1.0, z, opt.glow, 3, 5);
     }
-    if (opt.fire) this.torches.push({ x, y: 0.95, z, room: this.roomAtRow(r), brazier: true, phase: Math.random() * 10 });
+    if (opt.fire) this.addTorchLight({ x, y: 0.95, z, room: this.roomAtRow(r), brazier: true, phase: Math.random() * 10 });
     return p;
   }
 
@@ -248,7 +277,35 @@ export class World {
     mesh.position.set(x, 0.02, z);
     this.group.add(mesh);
     this.rune = mesh;
-    const l = new THREE.PointLight(0x3a8aff, 3, 5, 1.6); l.position.set(x, 0.8, z); this.group.add(l);
+    this.addLight(x, 0.8, z, 0x3a8aff, 3, 5);
+  }
+
+  /** Register a light source; the LightPool decides which ones get a real light each frame. */
+  addLight(x, y, z, color, intensity, range) {
+    const s = { x, y, z, color: new THREE.Color(color), intensity, range, flicker: false };
+    this.lights.push(s);
+    return s;
+  }
+
+  /** Solid dark rock over every empty tile and around the map, so nothing outside the rooms is ever empty. */
+  addRock(voids) {
+    const mat = new THREE.MeshLambertMaterial({ color: 0x12151f });
+    const geos = [];
+    const quad = (x0, z0, x1, z1, y) => {
+      const g = new THREE.PlaneGeometry(x1 - x0, z1 - z0).rotateX(-Math.PI / 2);
+      g.translate((x0 + x1) / 2, y, (z0 + z1) / 2);
+      geos.push(g);
+    };
+    const HIGH = 1.15, LOW = 0.42;
+    for (const v of voids) quad(v.x - 0.5, v.z - 0.5, v.x + 0.5, v.z + 0.5, v.low ? LOW : HIGH);
+    const x0 = -this.half, x1 = this.half, zT = this.cz(0) - 0.5, zB = this.cz(this.H - 1) + 0.5, F = 40;
+    quad(x0 - F, zT - F, x0, zB + F, HIGH);
+    quad(x1, zT - F, x1 + F, zB + F, HIGH);
+    quad(x0, zT - F, x1, zT, HIGH);
+    quad(x0, zB, x1, zB + F, LOW);
+    const merged = mergeGeometries(geos);
+    const mesh = new THREE.Mesh(merged, mat);
+    this.group.add(mesh);
   }
 
   addTorch(x, z, dir, room) {
@@ -257,7 +314,13 @@ export class World {
     o.rotation.y = Math.atan2(dir.x, dir.z) + Math.PI; // model faces -Y(blender) => +Z; mount points out of wall
     this.group.add(o);
     const fx = x + dir.x * 0.17, fz = z + dir.z * 0.17;
-    this.torches.push({ x: fx, y: 1.02, z: fz, room, phase: Math.random() * 10, obj: o });
+    this.addTorchLight({ x: fx, y: 1.02, z: fz, room, phase: Math.random() * 10, obj: o });
+  }
+
+  addTorchLight(t) {
+    this.torches.push(t);
+    // the real light sits a bit above and in front of the flame
+    this.lights.push({ x: t.x, y: t.y + 0.35, z: t.z, color: new THREE.Color(t.brazier ? 0xff8a34 : 0xff9a40), intensity: t.brazier ? 8 : 7, range: 6.5, flicker: true, phase: t.phase });
   }
 
   addBanner(x, z, dir) {
@@ -290,13 +353,13 @@ export class World {
 
   setGate(gate, closed) {
     gate.closed = closed;
-    for (const c of [6, 7]) this.grid[this.idx(c, gate.r)] = closed ? TILE.GATE : TILE.FLOOR;
+    for (const c of [this.half - 1, this.half]) this.grid[this.idx(c, gate.r)] = closed ? TILE.GATE : TILE.FLOOR;
     gate.bars.visible = true;
   }
 
   openExit() {
     this.exitOpen = true;
-    for (const c of [6, 7]) this.grid[this.idx(c, this.rooms[6].rowTop)] = TILE.FLOOR;
+    for (const c of [this.half - 1, this.half]) this.grid[this.idx(c, this.rooms[6].rowTop)] = TILE.FLOOR;
   }
 
   addVoidDust() {
@@ -330,7 +393,7 @@ export class World {
     for (let r = r0 - 1; r <= r0 + 1; r++) {
       for (let c = c0 - 1; c <= c0 + 1; c++) {
         if (this.tileAt(c, r) === TILE.FLOOR) continue;
-        const minx = c - 7, maxx = minx + 1, minz = r + this.zOff - 0.5, maxz = minz + 1;
+        const minx = c - this.half, maxx = minx + 1, minz = r + this.zOff - 0.5, maxz = minz + 1;
         const nx = Math.max(minx, Math.min(pos.x, maxx)), nz = Math.max(minz, Math.min(pos.z, maxz));
         const dx = pos.x - nx, dz = pos.z - nz;
         const d2 = dx * dx + dz * dz;
@@ -417,7 +480,7 @@ export class World {
   randomFloorIn(room, rand = Math.random) {
     for (let k = 0; k < 50; k++) {
       const r = room.rowTop + 1 + Math.floor(rand() * (room.rowBottom - room.rowTop - 1));
-      const c = 1 + Math.floor(rand() * 12);
+      const c = 1 + Math.floor(rand() * (this.W - 2));
       if (this.tileAt(c, r) === TILE.FLOOR) return new THREE.Vector3(this.cx(c), 0, this.cz(r));
     }
     return room.center.clone();
@@ -426,7 +489,7 @@ export class World {
   floorCells(room) {
     const out = [];
     for (let r = room.rowTop + 1; r < room.rowBottom; r++)
-      for (let c = 1; c < 13; c++) if (this.tileAt(c, r) === TILE.FLOOR) out.push(new THREE.Vector3(this.cx(c), 0, this.cz(r)));
+      for (let c = 1; c < this.W - 1; c++) if (this.tileAt(c, r) === TILE.FLOOR) out.push(new THREE.Vector3(this.cx(c), 0, this.cz(r)));
     return out;
   }
 }

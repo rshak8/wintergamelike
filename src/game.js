@@ -5,6 +5,7 @@ import { Enemy } from './enemies.js';
 import { World } from './world.js';
 import { FX, TEX } from './fx.js';
 import { audio } from './audio.js';
+import { LightPool } from './lights.js';
 import { WEAPONS, CHEST_WEAPONS, BUFFS, CHAR_SCALE } from './config.js';
 
 const _v = new THREE.Vector3();
@@ -35,11 +36,8 @@ export class Game {
     const r = shuffle(['buff', 'weapon', 'mimic']);
     this.rewards[3] = r[0]; this.rewards[4] = r[1]; this.rewards[5] = r[2];
     this.tutorial = { moved: false, stopHint: false, dodgeHint: false };
-    this.torchLights = [];
-    for (let i = 0; i < 6; i++) {
-      const l = new THREE.PointLight(0xff9a40, 0, 6.5, 1.7);
-      scene.add(l); this.torchLights.push(l);
-    }
+    this.lights = new LightPool(scene, 8);
+    for (const s of this.world.lights) this.lights.add(s);
     this.coinGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.035, 10).rotateZ(Math.PI / 2);
     this.coinMat = new THREE.MeshStandardMaterial({ color: 0xffc83a, emissive: 0xffa020, emissiveIntensity: 0.6, metalness: 0.3, roughness: 0.35 });
     this.player.cantDie = true;
@@ -253,7 +251,9 @@ export class Game {
       p.tele = this.fx.telegraph({ shape: 'circle', pos: o.target, radius: o.radius, time: p.flight, color: 0xb040ff });
     } else {
       p.vel = dir.clone().multiplyScalar(o.speed);
-      if (kind === 'arrow' || kind === 'crescent') obj.rotation.y = Math.atan2(dir.x, dir.z);
+      // the crescent texture's curved edge points to -Z, so turn it around to lead with the blade
+      if (kind === 'arrow') obj.rotation.y = Math.atan2(dir.x, dir.z);
+      else if (kind === 'crescent') obj.rotation.y = Math.atan2(dir.x, dir.z) + Math.PI;
     }
     this.projectiles.push(p);
   }
@@ -499,7 +499,7 @@ export class Game {
     this.chests.push(chest);
     this.dropIn(obj, pos, () => { chest.state = 'closed'; });
     // beacon light
-    const l = new THREE.PointLight(0xffd070, 3, 5, 1.6); l.position.set(pos.x, 1.4, pos.z); this.scene.add(l); chest.light = l;
+    chest.light = this.lights.add({ x: pos.x, y: 1.4, z: pos.z, color: new THREE.Color(0xffd070), intensity: 3, range: 5, flicker: false });
   }
 
   dropIn(obj, pos, done) {
@@ -771,18 +771,8 @@ export class Game {
   }
 
   updateLights(dt) {
-    // assign pooled point lights to the torches closest to the player
-    const P = this.player.pos;
+    this.lights.update(dt, this.time, this.camTarget);
     const ts = this.world.torches;
-    const sorted = ts.map((t) => ({ t, d: (t.x - P.x) ** 2 + (t.z - P.z) ** 2 })).sort((a, b) => a.d - b.d);
-    for (let i = 0; i < this.torchLights.length; i++) {
-      const l = this.torchLights[i]; const s = sorted[i];
-      if (!s) { l.intensity = 0; continue; }
-      const t = s.t;
-      const fl = 0.85 + Math.sin(this.time * 13 + t.phase) * 0.08 + Math.sin(this.time * 23 + t.phase * 2) * 0.06;
-      l.position.set(t.x, t.y + 0.3, t.z);
-      l.intensity = 7 * fl;
-    }
     for (const t of ts) {
       const fl = 0.85 + Math.sin(this.time * 13 + t.phase) * 0.1 + Math.sin(this.time * 31 + t.phase) * 0.05;
       if (t.sprite) t.sprite.scale.setScalar((t.brazier ? 1.4 : 0.95) * fl);
@@ -799,45 +789,68 @@ export class Game {
       target = this.camFocus.pos;
       if (this.camFocus.t <= 0) this.camFocus = null;
     }
-    // clamp to the current room so we don't stare at the void
     const want = _w.copy(target);
-    const room = this.world.roomAtRow(this.world.row(P.pos.z));
-    if (!this.camFocus && this.view) {
-      want.z -= this.view.ahead;
-      const maxX = Math.max(0, 7 - this.view.halfW - 0.2);
-      want.x = Math.max(-maxX, Math.min(maxX, want.x));
-      if (room) {
-        const bottomLimit = room.zBottom + 0.8 - this.view.down;
-        if (want.z > bottomLimit) want.z = bottomLimit;
-      }
+    if (this.view) {
+      if (!this.camFocus) want.z -= this.view.ahead;
+      this.clampToRoom(want, target);
     }
     this.camTarget.lerp(want, Math.min(1, dt * (this.camFocus ? 3 : 7)));
     const off = this.camOffset;
     const sh = this.fx.shakeOffset(this.time);
     this.camera.position.set(this.camTarget.x + off.x + sh.x, off.y, this.camTarget.z + off.z + sh.z);
-    this.camera.lookAt(this.camTarget.x + sh.x, 0, this.camTarget.z - 0.6 + sh.z);
+    this.camera.lookAt(this.camTarget.x + sh.x, 0, this.camTarget.z + sh.z);
+  }
+
+  /** Keep everything the camera sees inside the room (walls included), so nothing behind the room shows. */
+  clampToRoom(want, target) {
+    const W = this.world, v = this.view;
+    const r = W.row(target.z);
+    let top = -Infinity, bottom = Infinity;
+    const room = W.roomAtRow(r);
+    if (room) { top = room.zTop - 0.5; bottom = room.zBottom + 0.5; }
+    else {
+      // in a corridor: allow the span from the room above to the room below
+      for (const rm of W.rooms) {
+        if (!rm) continue;
+        if (rm.rowBottom < r) top = Math.max(top, rm.zTop - 0.5);
+        if (rm.rowTop > r) bottom = Math.min(bottom, rm.zBottom + 0.5);
+      }
+    }
+    const lo = top - v.top, hi = bottom - v.bottom;
+    want.z = lo > hi ? (lo + hi) / 2 : Math.max(lo, Math.min(hi, want.z));
+    const maxX = Math.max(0, W.half - v.halfTop);
+    want.x = Math.max(-maxX, Math.min(maxX, want.x));
   }
 
   resize(w, h) {
     this.W = w; this.H = h;
     const aspect = w / h;
     const portrait = aspect < 1;
-    this.camera.fov = portrait ? 46 : 38;
-    // distance scales so ~8.5 tiles fit across a phone in portrait, more in landscape
-    const dist = portrait ? 7.6 / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * aspect) * 0.92 : 12;
-    const pitch = THREE.MathUtils.degToRad(60);
-    this.camOffset = { x: 0, y: Math.sin(pitch) * dist, z: Math.cos(pitch) * dist };
+    this.camera.fov = portrait ? 42 : 34;
     this.camera.aspect = aspect;
     this.camera.updateProjectionMatrix();
-    // measure what the camera sees on the ground (relative to its target)
-    this.camera.position.set(this.camOffset.x, this.camOffset.y, this.camOffset.z);
-    this.camera.lookAt(0, 0, -0.6);
+    const pitch = THREE.MathUtils.degToRad(58);
+    const dir = { y: Math.sin(pitch), z: Math.cos(pitch) };
+    // what the camera sees on the ground at distance 1 (it all scales with distance)
+    this.camera.position.set(0, dir.y, dir.z);
+    this.camera.lookAt(0, 0, 0);
     this.camera.updateMatrixWorld();
-    const rc = new THREE.Raycaster(); const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); const hit = new THREE.Vector3();
-    const at = (x, y) => { rc.setFromCamera(new THREE.Vector2(x, y), this.camera); return rc.ray.intersectPlane(ground, hit) ? hit.clone() : new THREE.Vector3(); };
-    const bottom = at(0, -1), mid = at(0, -0.2);
-    const halfW = Math.abs(at(1, -0.2).x - mid.x);
-    this.view = { down: bottom.z, halfW, ahead: portrait ? 1.6 : 0.8 };
+    const rc = new THREE.Raycaster(), ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
+    const at = (x, y) => { rc.setFromCamera(new THREE.Vector2(x, y), this.camera); return rc.ray.intersectPlane(ground, hit) ? hit.clone() : new THREE.Vector3(0, 0, -50); };
+    const tl = at(-1, 1), tr = at(1, 1), bc = at(0, -1), ml = at(-1, 0), mr = at(1, 0);
+    const top1 = Math.min(tl.z, tr.z), bottom1 = bc.z, halfTop1 = Math.max(Math.abs(tl.x), Math.abs(tr.x));
+    const across1 = mr.x - ml.x;
+    // portrait keeps even the wide top corners inside the side walls; a wide landscape screen
+    // can't, so there the middle row fits and the rock fills the far corners
+    const sideHalf1 = portrait ? halfTop1 : across1 / 2;
+    // how close we'd like to be: ~6 tiles across in portrait, ~12 in landscape
+    let dist = (portrait ? 6.2 : 12) / across1;
+    // never see past the shortest room or past the side walls
+    let minDepth = Infinity;
+    for (const rm of this.world.rooms) if (rm) minDepth = Math.min(minDepth, rm.rowBottom - rm.rowTop + 1);
+    dist = Math.min(dist, (minDepth - 0.3) / (bottom1 - top1), (this.world.half - 0.05) / sideHalf1);
+    this.camOffset = { x: 0, y: dir.y * dist, z: dir.z * dist };
+    this.view = { top: top1 * dist, bottom: bottom1 * dist, halfTop: sideHalf1 * dist, ahead: portrait ? 1.0 : 0.4 };
     this.fx.setScale(h, this.camera.fov);
   }
 }

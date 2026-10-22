@@ -48,7 +48,6 @@ export class UI {
     this.wbtn.addEventListener('pointerdown', (e) => { stop(e); audio.unlock(); this.G?.player.swap(); this.wbtn.classList.remove('pulse'); this.wbtn.classList.add('press'); setTimeout(() => this.wbtn.classList.remove('press'), 120); });
     const mute = q('.mute');
     mute.addEventListener('pointerdown', (e) => { stop(e); audio.setMuted(!audio.muted); mute.textContent = audio.muted ? '🔇' : '🔊'; });
-    window.addEventListener('keydown', (e) => { if (e.code === 'KeyQ' || e.code === 'Space') this.G?.player.swap(); });
   }
 
   bind(G) { this.G = G; this.updateHp(); this.updateWeapons(); this.setRoom(1); this.updateCoins(); }

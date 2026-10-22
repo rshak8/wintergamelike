@@ -28,7 +28,7 @@ export class Enemy {
         const basis = type === 'archer' ? 'bow' : type === 'necro' ? 'orb' : 'blade';
         this.rig.attach(w, basis);
         this.weaponObj = w;
-        if (type === 'healer') { this.rig.idlePitch = -2.5; }
+        if (type === 'healer') { this.rig.idlePitch = -2.75; }
         if (type === 'archer') { this.rig.armRestR = -0.9; }
         if (type === 'king') { w.scale.setScalar(1.1); }
       }

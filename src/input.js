@@ -1,4 +1,4 @@
-// Floating virtual joystick (appears under the finger) + keyboard fallback.
+// Floating virtual joystick (appears under the finger). Touch only: the game is phone-only.
 export class Input {
   constructor(el) {
     this.el = el;
@@ -7,7 +7,6 @@ export class Input {
     this.touching = false;
     this.onFirstInput = null;
     this.enabled = true;
-    this.keys = new Set();
     this.pid = null;
     this.radius = 60;
 
@@ -23,9 +22,7 @@ export class Input {
     window.addEventListener('pointermove', (e) => this.moveEv(e));
     window.addEventListener('pointerup', (e) => this.up(e));
     window.addEventListener('pointercancel', (e) => this.up(e));
-    window.addEventListener('keydown', (e) => { this.keys.add(e.code); this.first(); });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
-    window.addEventListener('blur', () => { this.keys.clear(); this.release(); });
+    window.addEventListener('blur', () => this.release());
   }
 
   first() {
@@ -86,16 +83,9 @@ export class Input {
     this.base.classList.remove('on');
   }
 
-  /** Returns current move vector {x, y, mag}. Keyboard overrides when used. */
+  /** Returns current move vector {x, y, mag}. */
   read() {
     if (!this.enabled) return { x: 0, y: 0, mag: 0 };
-    let kx = 0, ky = 0;
-    const k = this.keys;
-    if (k.has('KeyA') || k.has('ArrowLeft')) kx -= 1;
-    if (k.has('KeyD') || k.has('ArrowRight')) kx += 1;
-    if (k.has('KeyW') || k.has('ArrowUp')) ky -= 1;
-    if (k.has('KeyS') || k.has('ArrowDown')) ky += 1;
-    if (kx || ky) { const l = Math.hypot(kx, ky); return { x: kx / l, y: ky / l, mag: 1 }; }
     return { x: this.x, y: this.y, mag: this.mag };
   }
 }

@@ -1,7 +1,7 @@
 // All tunable numbers live here.
 export const CTA_URL = 'https://example.com/store'; // TODO: replace with store link
 
-export const CHAR_SCALE = 0.8;
+export const CHAR_SCALE = 0.9;
 
 export const PLAYER = {
   hp: 10,
@@ -24,7 +24,7 @@ export const WEAPONS = {
   },
   ice: {
     name: 'Ice Bow', rarity: 'Epic', color: '#6fd4ff', model: 'W_IceBow', kind: 'bow', anim: 'shoot',
-    dmg: 4, cd: 0.38, range: 11, speed: 20, knock: 2, slow: { time: 2.5, mult: 0.45 }, desc: 'Instant shot · slows enemies',
+    dmg: 5, cd: 0.72, range: 11, speed: 20, knock: 2, slow: { time: 2.5, mult: 0.45 }, desc: 'Instant shot · slows enemies',
   },
   lightning: {
     name: 'Lightning Staff', rarity: 'Epic', color: '#a57bff', model: 'W_LightningStaff', kind: 'staff', anim: 'cast',
@@ -49,10 +49,10 @@ export const BUFFS = {
 };
 
 export const ENEMIES = {
-  warrior: { model: 'SkelWarrior', weapon: 'W_EnemySword', hp: 13, speed: 2.7, radius: 0.32, dmg: 2, scale: 1, coins: 3 },
-  archer: { model: 'SkelArcher', weapon: 'W_ArcherBow', hp: 9, speed: 2.4, radius: 0.3, dmg: 2, scale: 1, coins: 3 },
-  necro: { model: 'Necro', weapon: 'W_NecroOrb', hp: 11, speed: 1.8, radius: 0.32, dmg: 3, scale: 1, coins: 4 },
-  healer: { model: 'Healer', weapon: 'W_Scepter', hp: 9, speed: 3.3, radius: 0.3, dmg: 0, scale: 1, coins: 4, heal: 4, healEvery: 3.6 },
-  king: { model: 'SkelKing', weapon: 'W_BossSword', hp: 230, speed: 2.3, radius: 0.7, dmg: 2, scale: 2.0, coins: 30 },
-  mimic: { model: 'T_Mimic', weapon: null, hp: 32, speed: 3.6, radius: 0.5, dmg: 2, scale: 1, coins: 10 },
+  warrior: { model: 'SkelWarrior', weapon: 'W_EnemySword', hp: 13, speed: 2.7, radius: 0.36, dmg: 2, scale: 1.15, coins: 3 },
+  archer: { model: 'SkelArcher', weapon: 'W_ArcherBow', hp: 9, speed: 2.4, radius: 0.34, dmg: 2, scale: 1.15, coins: 3 },
+  necro: { model: 'Necro', weapon: 'W_NecroOrb', hp: 11, speed: 1.8, radius: 0.36, dmg: 3, scale: 1.15, coins: 4 },
+  healer: { model: 'Healer', weapon: 'W_Scepter', hp: 9, speed: 3.3, radius: 0.34, dmg: 0, scale: 1.15, coins: 4, heal: 4, healEvery: 3.6 },
+  king: { model: 'SkelKing', weapon: 'W_BossSword', hp: 230, speed: 2.3, radius: 0.75, dmg: 2, scale: 2.05, coins: 30 },
+  mimic: { model: 'T_Mimic', weapon: null, hp: 32, speed: 3.6, radius: 0.55, dmg: 2, scale: 1.15, coins: 10 },
 };
