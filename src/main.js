@@ -71,8 +71,9 @@ async function boot() {
   renderer.compile(scene, camera);
   bar.style.width = '100%';
   setTimeout(() => document.getElementById('loading').classList.add('done'), 150);
-  input.onFirstInput = () => { audio.unlock(); audio.musicOn(true); };
-  document.addEventListener('pointerdown', () => audio.unlock(), { once: true });
+  // sound and music start on the very first tap anywhere (capture phase, so buttons count too)
+  const startSound = () => { audio.unlock(); audio.musicOn(true); };
+  for (const ev of ['pointerdown', 'touchstart', 'touchend', 'click', 'keydown']) window.addEventListener(ev, startSound, { capture: true, once: true });
   game.start();
   let last = performance.now();
   function frame(now) {

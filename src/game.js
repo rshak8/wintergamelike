@@ -10,6 +10,7 @@ import { WEAPONS, CHEST_WEAPONS, BUFFS, CHAR_SCALE } from './config.js';
 
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
+const _u = new THREE.Vector3();
 const rnd = (a, b) => a + Math.random() * (b - a);
 const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
@@ -783,18 +784,25 @@ export class Game {
 
   updateCamera(dt) {
     const P = this.player;
-    let target = _v.copy(P.pos).addScaledVector(P.vel, 0.12);
+    let target = _v.copy(P.pos);
     if (this.camFocus) {
       this.camFocus.t -= dt;
       target = this.camFocus.pos;
       if (this.camFocus.t <= 0) this.camFocus = null;
     }
     const want = _w.copy(target);
+    // the camera trails the hero a little; if it ever ends up past the room edge
+    // (e.g. right after a room change) it catches up fast instead
+    let rate = this.camFocus ? 3 : 4.5; // 4.5 → about one tile of lag at full run speed
     if (this.view) {
       if (!this.camFocus) want.z -= this.view.ahead;
       this.clampToRoom(want, target);
+      if (!this.camReady) { this.camTarget.copy(want); this.camReady = true; }
+      const cur = _u.copy(this.camTarget);
+      this.clampToRoom(cur, target);
+      if (cur.distanceToSquared(this.camTarget) > 1e-4) rate = 9;
     }
-    this.camTarget.lerp(want, Math.min(1, dt * (this.camFocus ? 3 : 7)));
+    this.camTarget.lerp(want, 1 - Math.exp(-dt * rate));
     const off = this.camOffset;
     const sh = this.fx.shakeOffset(this.time);
     this.camera.position.set(this.camTarget.x + off.x + sh.x, off.y, this.camTarget.z + off.z + sh.z);

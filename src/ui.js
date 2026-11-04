@@ -13,12 +13,13 @@ export class UI {
         <div class="portrait" style="background-image:url(${heroIcon})"></div>
         <div class="bars">
           <div class="hpbar"><i></i><span></span></div>
-          <div class="coins"><b class="coin-ico"></b><span>0</span></div>
-          <div class="buffs"></div>
+          <div class="stat-row">
+            <div class="coins"><b class="coin-ico"></b><span>0</span></div>
+            <div class="buffs"></div>
+          </div>
         </div>
       </div>
       <div class="rooms"></div>
-      <button class="mute" aria-label="Mute">🔊</button>
       <div class="boss"><div class="bname"></div><div class="bbar"><i></i><em></em></div></div>
       <div class="hint"><span></span><div class="hand"></div></div>
       <div class="toast"><b></b><small></small></div>
@@ -45,9 +46,7 @@ export class UI {
     for (let i = 1; i <= 6; i++) rh += `<div class="rdot ${i === 6 ? 'skull' : ''}" data-i="${i}">${i === 6 ? '☠' : ''}</div>${i < 6 ? '<div class="rline"></div>' : ''}`;
     this.roomsEl.innerHTML = rh;
     const stop = (e) => e.stopPropagation();
-    this.wbtn.addEventListener('pointerdown', (e) => { stop(e); audio.unlock(); this.G?.player.swap(); this.wbtn.classList.remove('pulse'); this.wbtn.classList.add('press'); setTimeout(() => this.wbtn.classList.remove('press'), 120); });
-    const mute = q('.mute');
-    mute.addEventListener('pointerdown', (e) => { stop(e); audio.setMuted(!audio.muted); mute.textContent = audio.muted ? '🔇' : '🔊'; });
+    this.wbtn.addEventListener('pointerdown', (e) => { stop(e); this.G?.player.swap(); this.wbtn.classList.remove('pulse'); this.wbtn.classList.add('press'); setTimeout(() => this.wbtn.classList.remove('press'), 120); });
   }
 
   bind(G) { this.G = G; this.updateHp(); this.updateWeapons(); this.setRoom(1); this.updateCoins(); }

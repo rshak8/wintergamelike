@@ -50,11 +50,10 @@ button { font-family: var(--font); pointer-events: auto; border: 0; cursor: poin
 .coins.bump span { animation: bump .25s; }
 @keyframes bump { 50% { transform: scale(1.35); } }
 .coin-ico { display: inline-block; width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff3a0, #ffc83a 50%, #c88a10); border: 2px solid #7a4a10; vertical-align: middle; }
+.stat-row { display: flex; align-items: center; gap: 10px; }
 .buffs { display: flex; gap: 4px; }
 .buff-ico { width: 22px; height: 22px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 13px; background: var(--panel); border: 2px solid var(--c); color: var(--c); animation: pop .4s cubic-bezier(.2,1.6,.4,1); }
 @keyframes pop { from { transform: scale(0); } }
-
-.mute { position: absolute; right: max(10px, env(safe-area-inset-right)); top: max(10px, env(safe-area-inset-top)); width: 38px; height: 38px; border-radius: 10px; background: var(--panel); border: 2px solid var(--edge); font-size: 18px; color: #fff; }
 
 /* rooms progress */
 .rooms { position: absolute; left: 50%; transform: translateX(-50%); top: max(76px, calc(env(safe-area-inset-top) + 72px)); display: flex; align-items: center; padding: 5px 8px; background: var(--panel); border: 2px solid var(--edge); border-radius: 20px; }
@@ -87,30 +86,30 @@ button { font-family: var(--font); pointer-events: auto; border: 0; cursor: poin
 @keyframes drag { 0% { transform: translate(-40px, 0); } 50% { transform: translate(40px, -10px); } 100% { transform: translate(-40px, 0); } }
 
 /* toast */
-.toast { position: absolute; left: 50%; top: 25%; transform: translate(-50%, -50%); text-align: center; opacity: 0; pointer-events: none; }
+.toast { position: absolute; left: 50%; top: max(25%, calc(env(safe-area-inset-top) + 190px)); transform: translate(-50%, -50%); text-align: center; opacity: 0; pointer-events: none; }
 .toast b { display: block; font-size: 34px; font-weight: 900; color: var(--gold); letter-spacing: 1px; }
 .toast small { display: block; font-size: 15px; font-weight: 700; color: #dfe6ff; text-shadow: 0 2px 0 var(--ink); margin-top: 2px; }
 .toast.show { animation: toast 1.9s forwards; }
 @keyframes toast { 0% { opacity: 0; transform: translate(-50%, -50%) scale(1.8); } 12% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 80% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -70%) scale(.95); } }
 
 /* weapon button */
-.weapon-btn { position: absolute; right: max(14px, env(safe-area-inset-right)); bottom: max(22px, calc(env(safe-area-inset-bottom) + 14px)); width: 92px; height: 92px; border-radius: 50%;
+.weapon-btn { position: absolute; right: max(14px, env(safe-area-inset-right)); bottom: max(22px, calc(env(safe-area-inset-bottom) + 14px)); width: 72px; height: 72px; border-radius: 50%;
   background: radial-gradient(circle at 50% 35%, #2c3560, #151a30 70%); border: 4px solid var(--wc, #cfd3dd); box-shadow: 0 4px 0 var(--ink), 0 0 18px color-mix(in srgb, var(--wc, #fff) 40%, transparent); transition: transform .1s; }
 .weapon-btn.press { transform: scale(.9); }
 .weapon-btn.flash { animation: wflash .4s; }
 @keyframes wflash { 30% { transform: scale(1.18) rotate(-8deg); } }
 .weapon-btn.pulse { animation: wpulse .8s infinite; }
 @keyframes wpulse { 50% { transform: scale(1.12); box-shadow: 0 4px 0 var(--ink), 0 0 30px var(--wc); } }
-.w-main { position: absolute; inset: 8px; display: flex; align-items: center; justify-content: center; }
+.w-main { position: absolute; inset: 6px; display: flex; align-items: center; justify-content: center; }
 .w-main img { width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 3px 0 rgba(0,0,0,.5)); }
-.w-alt { display: none; position: absolute; left: -26px; top: -14px; width: 44px; height: 44px; border-radius: 50%; background: #151a30; border: 3px solid #3d4670; padding: 4px; }
+.w-alt { display: none; position: absolute; left: -20px; top: -12px; width: 34px; height: 34px; border-radius: 50%; background: #151a30; border: 2px solid #3d4670; padding: 3px; }
 .w-alt img { width: 100%; height: 100%; object-fit: contain; }
-.w-swap { display: none; position: absolute; left: -12px; top: 26px; font-size: 16px; font-weight: 900; color: #fff; text-shadow: 0 2px 0 #000; }
+.w-swap { display: none; position: absolute; left: -10px; top: 22px; font-size: 13px; font-weight: 900; color: #fff; text-shadow: 0 2px 0 #000; }
 .weapon-btn.two .w-alt, .weapon-btn.two .w-swap { display: block; }
-.w-name { position: absolute; left: 50%; bottom: -16px; transform: translateX(-50%); white-space: nowrap; font-size: 12px; font-weight: 900; color: var(--wc); }
+.w-name { position: absolute; left: 50%; bottom: -15px; transform: translateX(-50%); white-space: nowrap; font-size: 11px; font-weight: 900; color: var(--wc); }
 
 /* weapon card */
-.wcard { position: absolute; left: 50%; bottom: max(140px, calc(env(safe-area-inset-bottom) + 130px)); transform: translate(-50%, 30px); opacity: 0; transition: all .35s cubic-bezier(.2,1.5,.4,1); display: flex; gap: 10px; align-items: center; padding: 10px 14px 10px 10px; background: var(--panel); border: 3px solid var(--edge); border-radius: 14px; box-shadow: 0 4px 0 var(--ink); min-width: 250px; }
+.wcard { position: absolute; left: 50%; bottom: max(114px, calc(env(safe-area-inset-bottom) + 106px)); transform: translate(-50%, 30px); opacity: 0; transition: all .35s cubic-bezier(.2,1.5,.4,1); display: flex; gap: 10px; align-items: center; padding: 10px 14px 10px 10px; background: var(--panel); border: 3px solid var(--edge); border-radius: 14px; box-shadow: 0 4px 0 var(--ink); min-width: 250px; }
 .wcard.show { opacity: 1; transform: translate(-50%, 0); }
 .wcard img { width: 64px; height: 64px; background: #0e1222; border-radius: 10px; }
 .wcard b { display: block; font-size: 18px; font-weight: 900; }
@@ -166,10 +165,12 @@ button { font-family: var(--font); pointer-events: auto; border: 0; cursor: poin
 @keyframes ctapulse { 50% { transform: scale(1.08); } }
 .ps-sub { position: relative; font-size: 14px; font-weight: 700; color: #c8d0f0; }
 
-.landscape .hint { top: 30%; }
+.landscape .toast { top: max(36%, calc(env(safe-area-inset-top) + 130px)); }
+.landscape .hint { top: 64%; }
+.landscape .wcard { bottom: max(12px, env(safe-area-inset-bottom)); }
 @media (max-height: 520px) {
   .portrait { width: 44px; height: 44px; }
-  .weapon-btn { width: 78px; height: 78px; }
+  .weapon-btn { width: 62px; height: 62px; }
   .ps-hero { width: 100px; height: 100px; }
   .ps-logo { font-size: 28px; } .ps-logo span { font-size: 36px; }
   .card { height: 130px; }
