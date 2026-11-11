@@ -1,21 +1,28 @@
+export interface MoveInput { x: number; y: number; mag: number }
+
 // Floating virtual joystick (appears under the finger). Touch only: the game is phone-only.
 export class Input {
-  constructor(el) {
+  el: HTMLElement;
+  x = 0; y = 0;      // -1..1, y = down-screen
+  mag = 0;
+  touching = false;
+  onFirstInput: (() => void) | null = null;
+  enabled = true;
+  pid: number | null = null;
+  radius = 60;
+  ox = 0; oy = 0;    // joystick centre on screen
+  base: HTMLDivElement;
+  knob: HTMLDivElement;
+
+  constructor(el: HTMLElement) {
     this.el = el;
-    this.x = 0; this.y = 0;      // -1..1, y = down-screen
-    this.mag = 0;
-    this.touching = false;
-    this.onFirstInput = null;
-    this.enabled = true;
-    this.pid = null;
-    this.radius = 60;
 
     const base = document.createElement('div');
     base.className = 'joy-base';
     const knob = document.createElement('div');
     knob.className = 'joy-knob';
     base.appendChild(knob);
-    document.getElementById('app').appendChild(base);
+    document.getElementById('app')!.appendChild(base);
     this.base = base; this.knob = knob;
 
     el.addEventListener('pointerdown', (e) => this.down(e));
@@ -29,7 +36,7 @@ export class Input {
     if (this.onFirstInput) { const f = this.onFirstInput; this.onFirstInput = null; f(); }
   }
 
-  down(e) {
+  down(e: PointerEvent) {
     this.first();
     if (!this.enabled || this.pid !== null) return;
     this.pid = e.pointerId;
@@ -43,7 +50,7 @@ export class Input {
     this.setKnob(0, 0);
   }
 
-  moveEv(e) {
+  moveEv(e: PointerEvent) {
     if (e.pointerId !== this.pid) return;
     let dx = e.clientX - this.ox, dy = e.clientY - this.oy;
     const d = Math.hypot(dx, dy);
@@ -59,7 +66,7 @@ export class Input {
     this.setKnob(dx, dy);
   }
 
-  setKnob(dx, dy) {
+  setKnob(dx: number, dy: number) {
     const R = this.radius;
     const d = Math.hypot(dx, dy);
     const dead = R * 0.12;
@@ -71,7 +78,7 @@ export class Input {
     this.knob.style.transform = `translate(${dx}px, ${dy}px)`;
   }
 
-  up(e) {
+  up(e: PointerEvent) {
     if (e.pointerId !== this.pid) return;
     this.release();
   }
@@ -84,7 +91,7 @@ export class Input {
   }
 
   /** Returns current move vector {x, y, mag}. */
-  read() {
+  read(): MoveInput {
     if (!this.enabled) return { x: 0, y: 0, mag: 0 };
     return { x: this.x, y: this.y, mag: this.mag };
   }

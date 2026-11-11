@@ -1,8 +1,14 @@
 // Procedural WebAudio SFX + tiny music sequencer. No audio files.
-let ctx = null, master = null, sfxBus = null, musicBus = null, noiseBuf = null;
+let ctx: AudioContext | null = null;
+let master: GainNode | null = null;
+let sfxBus: GainNode | null = null;
+let musicBus: GainNode | null = null;
+let noiseBuf: AudioBuffer | null = null;
 let voices = 0;
 const MAX_VOICES = 24;
-const lastPlay = {};
+const lastPlay: Partial<Record<SfxName, number>> = {};
+
+export interface PlayOpts { pitch?: number }
 
 export const audio = {
   muted: false,
@@ -10,68 +16,83 @@ export const audio = {
     if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    ctx = new AC();
-    master = ctx.createGain(); master.gain.value = 0.8; master.connect(ctx.destination);
-    const comp = ctx.createDynamicsCompressor();
+    const c = ctx = new AC();
+    master = c.createGain(); master.gain.value = 0.8; master.connect(c.destination);
+    const comp = c.createDynamicsCompressor();
     comp.threshold.value = -14; comp.ratio.value = 4;
     comp.connect(master);
-    sfxBus = ctx.createGain(); sfxBus.gain.value = 0.9; sfxBus.connect(comp);
-    musicBus = ctx.createGain(); musicBus.gain.value = 0.0; musicBus.connect(comp);
-    noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 1.0, ctx.sampleRate);
+    sfxBus = c.createGain(); sfxBus.gain.value = 0.9; sfxBus.connect(comp);
+    musicBus = c.createGain(); musicBus.gain.value = 0.0; musicBus.connect(comp);
+    noiseBuf = c.createBuffer(1, c.sampleRate * 1.0, c.sampleRate);
     const d = noiseBuf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     music.start();
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) ctx.suspend(); else if (!audio.muted) ctx.resume();
+      if (document.hidden) c.suspend(); else if (!audio.muted) c.resume();
     });
   },
-  setMuted(m) { this.muted = m; if (master) master.gain.value = m ? 0 : 0.8; },
-  play(name, opts = {}) {
+  setMuted(m: boolean) { this.muted = m; if (master) master.gain.value = m ? 0 : 0.8; },
+  play(name: SfxName, opts: PlayOpts = {}) {
     if (!ctx || this.muted) return;
     const now = ctx.currentTime;
-    const gap = SFX[name]?.gap ?? 0.03;
-    if (lastPlay[name] && now - lastPlay[name] < gap) return;
+    const sfx: SfxDef = SFX[name];
+    const gap = sfx.gap ?? 0.03;
+    const last = lastPlay[name];
+    if (last && now - last < gap) return;
     lastPlay[name] = now;
-    if (voices >= MAX_VOICES && !SFX[name]?.important) return;
-    SFX[name]?.fn(now, opts);
+    if (voices >= MAX_VOICES && !sfx.important) return;
+    sfx.fn(now, opts);
   },
-  setIntensity(v) { music.intensity = v; },
-  musicOn(on) { if (musicBus) musicBus.gain.setTargetAtTime(on ? 0.32 : 0.0, ctx.currentTime, 0.6); },
+  setIntensity(v: number) { music.intensity = v; },
+  musicOn(on: boolean) { if (ctx && musicBus) musicBus.gain.setTargetAtTime(on ? 0.32 : 0.0, ctx.currentTime, 0.6); },
 };
 
-function track(node, dur) {
+function track(node: AudioNode, dur: number) {
   voices++;
   setTimeout(() => { voices--; try { node.disconnect(); } catch (e) { } }, (dur + 0.1) * 1000);
 }
 
-function env(g, t, a, peak, dcy, end = 0.0001) {
+function env(g: GainNode, t: number, a: number, peak: number, dcy: number, end = 0.0001) {
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(peak, t + a);
   g.gain.exponentialRampToValueAtTime(end, t + a + dcy);
 }
 
-function tone(t, { type = 'sine', f = 440, f2 = null, dur = 0.2, vol = 0.3, a = 0.005, bus = sfxBus, detune = 0 }) {
-  const o = ctx.createOscillator(); o.type = type; o.frequency.setValueAtTime(f, t);
+interface ToneOpts { type?: OscillatorType; f?: number; f2?: number | null; dur?: number; vol?: number; a?: number; bus?: GainNode | null; detune?: number }
+
+// tone() and noise() only run after unlock(), so the audio graph exists
+function tone(t: number, { type = 'sine', f = 440, f2 = null, dur = 0.2, vol = 0.3, a = 0.005, bus = sfxBus, detune = 0 }: ToneOpts) {
+  const c = ctx!;
+  const o = c.createOscillator(); o.type = type; o.frequency.setValueAtTime(f, t);
   o.detune.value = detune;
   if (f2) o.frequency.exponentialRampToValueAtTime(Math.max(20, f2), t + dur);
-  const g = ctx.createGain(); env(g, t, a, vol, dur);
-  o.connect(g); g.connect(bus);
+  const g = c.createGain(); env(g, t, a, vol, dur);
+  o.connect(g); g.connect(bus!);
   o.start(t); o.stop(t + a + dur + 0.05);
   track(g, a + dur);
 }
 
-function noise(t, { dur = 0.2, vol = 0.3, type = 'bandpass', f = 1000, f2 = null, q = 1, a = 0.003, bus = sfxBus }) {
-  const s = ctx.createBufferSource(); s.buffer = noiseBuf;
+interface NoiseOpts { dur?: number; vol?: number; type?: BiquadFilterType; f?: number; f2?: number | null; q?: number; a?: number; bus?: GainNode | null }
+
+function noise(t: number, { dur = 0.2, vol = 0.3, type = 'bandpass', f = 1000, f2 = null, q = 1, a = 0.003, bus = sfxBus }: NoiseOpts) {
+  const c = ctx!;
+  const s = c.createBufferSource(); s.buffer = noiseBuf;
   s.playbackRate.value = 0.7 + Math.random() * 0.6;
-  const fl = ctx.createBiquadFilter(); fl.type = type; fl.frequency.setValueAtTime(f, t); fl.Q.value = q;
+  const fl = c.createBiquadFilter(); fl.type = type; fl.frequency.setValueAtTime(f, t); fl.Q.value = q;
   if (f2) fl.frequency.exponentialRampToValueAtTime(f2, t + dur);
-  const g = ctx.createGain(); env(g, t, a, vol, dur);
-  s.connect(fl); fl.connect(g); g.connect(bus);
+  const g = c.createGain(); env(g, t, a, vol, dur);
+  s.connect(fl); fl.connect(g); g.connect(bus!);
   s.start(t, Math.random() * 0.5); s.stop(t + a + dur + 0.05);
   track(g, a + dur);
 }
 
-const r = (a, b) => a + Math.random() * (b - a);
+const r = (a: number, b: number) => a + Math.random() * (b - a);
+
+interface SfxDef {
+  fn: (t: number, o: PlayOpts) => void;
+  gap?: number;        // min seconds between two plays of this sound
+  important?: boolean; // plays even when the voice limit is reached
+}
 
 const SFX = {
   swing: { fn: (t) => { noise(t, { dur: 0.13, vol: 0.32, f: 900, f2: 3200, q: 1.2 }); } },
@@ -111,7 +132,10 @@ const SFX = {
   win: { important: true, fn: (t) => { [523, 659, 784, 1047, 784, 1047, 1319].forEach((f, i) => tone(t + i * 0.11, { type: 'square', f, dur: 0.2, vol: 0.09 })); } },
   lose: { important: true, fn: (t) => { [392, 349, 311, 262].forEach((f, i) => tone(t + i * 0.18, { type: 'triangle', f, dur: 0.3, vol: 0.14 })); } },
   ui: { fn: (t) => { tone(t, { type: 'sine', f: 880, f2: 1200, dur: 0.06, vol: 0.1 }); } },
-};
+} satisfies Record<string, SfxDef>;
+
+/** Every sound name: audio.play('typo') is a compile error. */
+export type SfxName = keyof typeof SFX;
 
 // --- tiny dungeon music: bass ostinato + pad + drums when intense ---
 const music = {
@@ -119,7 +143,7 @@ const music = {
   step: 0,
   next: 0,
   start() {
-    this.next = ctx.currentTime + 0.1;
+    this.next = ctx!.currentTime + 0.1;
     setInterval(() => this.tick(), 50);
   },
   tick() {
@@ -130,7 +154,7 @@ const music = {
       this.next += sp; this.step = (this.step + 1) % 64;
     }
   },
-  play(s, t, sp) {
+  play(s: number, t: number, sp: number) {
     const bassLine = [45, 45, 52, 45, 48, 48, 50, 47];
     const chord = Math.floor(s / 16) % 4;
     const roots = [0, -4, -2, -5];

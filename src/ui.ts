@@ -1,13 +1,32 @@
-import { WEAPONS, BUFFS, CTA_URL } from './config.js';
-import { audio } from './audio.js';
+import { WEAPONS, BUFFS, CTA_URL, type BuffId, type WeaponId } from './config';
+import { audio } from './audio';
+import type { Game } from './game';
 
-const $ = (html) => { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstChild; };
+const $ = (html: string) => { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstChild as HTMLElement; };
+
+export interface HintOpts { hand?: boolean; time?: number; warn?: boolean; stop?: boolean; swap?: boolean }
 
 export class UI {
-  constructor(icons, heroIcon) {
+  icons: Record<string, string>;
+  heroIcon: string;
+  G!: Game; // set by bind(); the player is created (and may call updateWeapons) a moment before that
+  hud: HTMLElement;
+  overlay: HTMLElement;
+  hpFill: HTMLElement; hpText: HTMLElement;
+  coinText: HTMLElement; buffBox: HTMLElement;
+  roomsEl: HTMLElement;
+  bossEl: HTMLElement; bossFill: HTMLElement; bossLag: HTMLElement;
+  hintEl: HTMLElement; toastEl: HTMLElement;
+  wcardEl: HTMLElement;
+  wbtn: HTMLButtonElement;
+  vig: HTMLElement; fadeEl: HTMLElement;
+  hintT?: ReturnType<typeof setTimeout>;
+  lagT?: ReturnType<typeof setTimeout>;
+
+  constructor(icons: Record<string, string>, heroIcon: string) {
     this.icons = icons; this.heroIcon = heroIcon;
-    this.hud = document.getElementById('hud');
-    this.overlay = document.getElementById('overlay');
+    this.hud = document.getElementById('hud')!;
+    this.overlay = document.getElementById('overlay')!;
     this.hud.innerHTML = `
       <div class="top-left">
         <div class="portrait" style="background-image:url(${heroIcon})"></div>
@@ -33,37 +52,38 @@ export class UI {
       <div class="vignette"></div>
       <div class="fade"></div>
     `;
-    const q = (s) => this.hud.querySelector(s);
+    const q = <T extends HTMLElement = HTMLElement>(s: string) => this.hud.querySelector<T>(s)!;
     this.hpFill = q('.hpbar i'); this.hpText = q('.hpbar span');
     this.coinText = q('.coins span'); this.buffBox = q('.buffs');
     this.roomsEl = q('.rooms');
     this.bossEl = q('.boss'); this.bossFill = q('.bbar i'); this.bossLag = q('.bbar em');
     this.hintEl = q('.hint'); this.toastEl = q('.toast');
     this.wcardEl = q('.wcard');
-    this.wbtn = q('.weapon-btn');
+    this.wbtn = q<HTMLButtonElement>('.weapon-btn');
     this.vig = q('.vignette'); this.fadeEl = q('.fade');
     let rh = '';
     for (let i = 1; i <= 6; i++) rh += `<div class="rdot ${i === 6 ? 'skull' : ''}" data-i="${i}">${i === 6 ? '☠' : ''}</div>${i < 6 ? '<div class="rline"></div>' : ''}`;
     this.roomsEl.innerHTML = rh;
-    const stop = (e) => e.stopPropagation();
+    const stop = (e: Event) => e.stopPropagation();
     this.wbtn.addEventListener('pointerdown', (e) => { stop(e); this.G?.player.swap(); this.wbtn.classList.remove('pulse'); this.wbtn.classList.add('press'); setTimeout(() => this.wbtn.classList.remove('press'), 120); });
   }
 
-  bind(G) { this.G = G; this.updateHp(); this.updateWeapons(); this.setRoom(1); this.updateCoins(); }
+  bind(G: Game) { this.G = G; this.updateHp(); this.updateWeapons(); this.setRoom(1); this.updateCoins(); }
 
   updateHp() {
     const P = this.G.player;
     this.hpFill.style.width = (P.hp / P.maxHp * 100) + '%';
     this.hpText.textContent = `${Math.ceil(P.hp)} / ${P.maxHp}`;
-    this.hpFill.parentElement.classList.toggle('low', P.hp / P.maxHp < 0.35);
+    this.hpFill.parentElement!.classList.toggle('low', P.hp / P.maxHp < 0.35);
   }
 
   updateCoins() {
-    this.coinText.textContent = this.G.player.coins;
-    this.coinText.parentElement.classList.remove('bump'); void this.coinText.offsetWidth; this.coinText.parentElement.classList.add('bump');
+    this.coinText.textContent = String(this.G.player.coins);
+    const box = this.coinText.parentElement!;
+    box.classList.remove('bump'); void this.coinText.offsetWidth; box.classList.add('bump');
   }
 
-  addBuff(k) {
+  addBuff(k: BuffId) {
     const b = BUFFS[k];
     const el = $(`<div class="buff-ico" style="--c:${b.color}">${b.icon}</div>`);
     this.buffBox.appendChild(el);
@@ -72,27 +92,27 @@ export class UI {
   updateWeapons() {
     const P = this.G?.player; if (!P) return;
     const cur = WEAPONS[P.wid];
-    this.wbtn.querySelector('.w-main img').src = this.icons[cur.model];
-    this.wbtn.querySelector('.w-name').textContent = cur.name;
+    this.wbtn.querySelector<HTMLImageElement>('.w-main img')!.src = this.icons[cur.model];
+    this.wbtn.querySelector('.w-name')!.textContent = cur.name;
     this.wbtn.style.setProperty('--wc', cur.color);
     const has2 = P.weapons.length > 1;
     this.wbtn.classList.toggle('two', has2);
     if (has2) {
       const alt = WEAPONS[P.weapons[1 - P.cur]];
-      this.wbtn.querySelector('.w-alt img').src = this.icons[alt.model];
+      this.wbtn.querySelector<HTMLImageElement>('.w-alt img')!.src = this.icons[alt.model];
     }
     this.wbtn.classList.remove('flash'); void this.wbtn.offsetWidth; this.wbtn.classList.add('flash');
   }
 
-  setRoom(i) {
-    this.roomsEl.querySelectorAll('.rdot').forEach((d) => {
-      const n = +d.dataset.i;
+  setRoom(i: number) {
+    this.roomsEl.querySelectorAll<HTMLElement>('.rdot').forEach((d) => {
+      const n = Number(d.dataset.i);
       d.classList.toggle('done', n < i); d.classList.toggle('cur', n === i);
     });
   }
 
-  hint(text, { hand = false, time = 0, warn = false, stop = false, swap = false } = {}) {
-    this.hintEl.querySelector('span').textContent = text;
+  hint(text: string, { hand = false, time = 0, warn = false, stop = false, swap = false }: HintOpts = {}) {
+    this.hintEl.querySelector('span')!.textContent = text;
     this.hintEl.className = 'hint show' + (hand ? ' with-hand' : '') + (warn ? ' warn' : '') + (stop ? ' stop' : '');
     clearTimeout(this.hintT);
     if (time) this.hintT = setTimeout(() => this.hintEl.classList.remove('show'), time * 1000);
@@ -100,25 +120,25 @@ export class UI {
   }
   hideHint() { this.hintEl.classList.remove('show'); }
 
-  toast(title, sub = '') {
-    this.toastEl.querySelector('b').textContent = title;
-    this.toastEl.querySelector('small').textContent = sub;
+  toast(title: string, sub = '') {
+    this.toastEl.querySelector('b')!.textContent = title;
+    this.toastEl.querySelector('small')!.textContent = sub;
     this.toastEl.classList.remove('show'); void this.toastEl.offsetWidth; this.toastEl.classList.add('show');
   }
 
-  weaponCard(id) {
+  weaponCard(id: WeaponId) {
     const w = WEAPONS[id];
     this.wcardEl.innerHTML = `<img src="${this.icons[w.model]}"><div><b style="color:${w.color}">${w.name}</b><em class="r-${w.rarity}">${w.rarity}</em><small>${w.desc}</small><i>Walk over to equip</i></div>`;
     this.wcardEl.classList.add('show');
   }
   hideWeaponCard() { this.wcardEl.classList.remove('show'); }
 
-  showBoss(name) {
-    this.bossEl.querySelector('.bname').textContent = name;
+  showBoss(name: string) {
+    this.bossEl.querySelector('.bname')!.textContent = name;
     this.bossEl.classList.add('show');
     this.updateBoss(1);
   }
-  updateBoss(k) {
+  updateBoss(k: number) {
     this.bossFill.style.width = Math.max(0, k * 100) + '%';
     clearTimeout(this.lagT);
     this.lagT = setTimeout(() => { this.bossLag.style.width = Math.max(0, k * 100) + '%'; }, 250);
@@ -129,10 +149,10 @@ export class UI {
     this.vig.classList.remove('hit'); void this.vig.offsetWidth; this.vig.classList.add('hit');
   }
 
-  buffChoice(keys, cb) {
+  buffChoice(keys: BuffId[], cb: (k: BuffId) => void) {
     audio.play('chestOpen');
     const el = $(`<div class="modal buffs-modal"><h2>CHOOSE A BLESSING</h2><div class="cards"></div></div>`);
-    const cards = el.querySelector('.cards');
+    const cards = el.querySelector('.cards')!;
     keys.forEach((k, i) => {
       const b = BUFFS[k];
       const c = $(`<button class="card" style="--c:${b.color};--d:${i * 0.08}s"><div class="ico">${b.icon}</div><b>${b.name}</b><small>${b.desc}</small></button>`);
@@ -148,12 +168,12 @@ export class UI {
     this.overlay.appendChild(el);
   }
 
-  fadeOut(cb) {
+  fadeOut(cb: () => void) {
     this.fadeEl.classList.add('on');
     setTimeout(cb, 700);
   }
 
-  packshot(win) {
+  packshot(win: boolean) {
     this.hideHint(); this.hideBoss(); this.hideWeaponCard();
     const P = this.G.player;
     const el = $(`
@@ -166,8 +186,8 @@ export class UI {
         <button class="cta">Continue?</button>
         <div class="ps-sub">${win ? 'Deeper floors await' : 'Your adventure is not over'}</div>
       </div>`);
-    const cta = el.querySelector('.cta');
-    const go = (e) => { e.stopPropagation(); audio.play('ui'); openStore(); };
+    const cta = el.querySelector('.cta')!;
+    const go = (e: Event) => { e.stopPropagation(); audio.play('ui'); openStore(); };
     cta.addEventListener('pointerdown', go);
     el.addEventListener('pointerdown', (e) => e.stopPropagation());
     this.overlay.appendChild(el);

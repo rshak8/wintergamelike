@@ -12,8 +12,40 @@ export const PLAYER = {
   stopDelay: 0.06,   // how long the stick must be released before auto-attack kicks in
 };
 
+export type WeaponId = 'sword' | 'fire' | 'ice' | 'lightning' | 'poison' | 'hammer';
+export type WeaponKind = 'melee' | 'bow' | 'staff';
+export type Rarity = 'Common' | 'Rare' | 'Epic' | 'Legendary';
+
+/** Damage over time (burn, poison). */
+export interface DotEffect { time: number; dps: number }
+export interface SlowEffect { time: number; mult: number }
+export interface ChainEffect { count: number; radius: number; dmg: number }
+
+export interface WeaponDef {
+  name: string;
+  rarity: Rarity;
+  color: string;
+  model: string;
+  kind: WeaponKind;
+  anim: string;
+  dmg: number;
+  cd: number;
+  range: number;
+  knock: number;
+  desc: string;
+  arc?: number;      // melee: swing width (radians)
+  lunge?: number;    // melee: dash toward the target
+  speed?: number;    // bow/staff: projectile speed
+  aoe?: number;
+  stun?: number;
+  burn?: DotEffect;
+  poison?: DotEffect;
+  slow?: SlowEffect;
+  chain?: ChainEffect;
+}
+
 // Weapon definitions. kind: melee | bow | staff
-export const WEAPONS = {
+export const WEAPONS: Record<WeaponId, WeaponDef> = {
   sword: {
     name: 'Knight Sword', rarity: 'Common', color: '#cfd3dd', model: 'W_Sword', kind: 'melee', anim: 'stab',
     dmg: 4, cd: 0.42, range: 1.75, arc: 0.5, lunge: 0.55, knock: 3.5, desc: 'Fast piercing thrust',
@@ -39,16 +71,33 @@ export const WEAPONS = {
     dmg: 9, cd: 0.95, range: 2.3, aoe: 2.2, lunge: 0.2, knock: 6, stun: 0.9, desc: 'Huge area slam · stuns',
   },
 };
-export const CHEST_WEAPONS = ['fire', 'ice', 'lightning', 'poison', 'hammer'];
+export const CHEST_WEAPONS: WeaponId[] = ['fire', 'ice', 'lightning', 'poison', 'hammer'];
 
-export const BUFFS = {
+export type BuffId = 'hp' | 'atkspd' | 'dmg' | 'speed';
+export interface BuffDef { name: string; desc: string; icon: string; color: string }
+
+export const BUFFS: Record<BuffId, BuffDef> = {
   hp: { name: 'Vitality', desc: '+4 Max HP', icon: '❤', color: '#ff4a5a' },
   atkspd: { name: 'Fury', desc: '+30% Attack Speed', icon: '⚡', color: '#ffd24a' },
   dmg: { name: 'Might', desc: '+35% Damage', icon: '⚔', color: '#ff7a2a' },
   speed: { name: 'Swiftness', desc: '+18% Move Speed', icon: '➶', color: '#5ad0ff' },
 };
 
-export const ENEMIES = {
+export type EnemyType = 'warrior' | 'archer' | 'necro' | 'healer' | 'king' | 'mimic';
+export interface EnemyDef {
+  model: string;
+  weapon: string | null;
+  hp: number;
+  speed: number;
+  radius: number;
+  dmg: number;
+  scale: number;
+  coins: number;
+  heal?: number;       // healer: hp restored per ally
+  healEvery?: number;  // healer: seconds between heals
+}
+
+export const ENEMIES: Record<EnemyType, EnemyDef> = {
   warrior: { model: 'SkelWarrior', weapon: 'W_EnemySword', hp: 13, speed: 2.7, radius: 0.36, dmg: 2, scale: 1.15, coins: 3 },
   archer: { model: 'SkelArcher', weapon: 'W_ArcherBow', hp: 9, speed: 2.4, radius: 0.34, dmg: 2, scale: 1.15, coins: 3 },
   necro: { model: 'Necro', weapon: 'W_NecroOrb', hp: 11, speed: 1.8, radius: 0.36, dmg: 3, scale: 1.15, coins: 4 },

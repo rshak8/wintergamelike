@@ -1,6 +1,8 @@
 import * as THREE from 'three';
-import { clone, instanced } from './assets.js';
-import { TEX } from './fx.js';
+import { clone, instanced, type InstanceTransform } from './assets';
+import { TEX, type XZ } from './fx';
+import type { LightSource } from './lights';
+import type { EnemyType } from './config';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // Legend: ' ' void  '#' wall  '.' floor  T torch-wall  N banner-wall  P pillar  C crate  B barrel  S spikes
@@ -124,21 +126,104 @@ const ROOM6 = [
 ];
 const CORR = ['     #..#     ', '     #..#     ', '     #..#     ', '     #..#     '];
 
-export const TILE = { FLOOR: 0, WALL: 1, PROP: 2, PILLAR: 3, VOID: 4, GATE: 5 };
+const SPAWN_CODES: Record<string, EnemyType> = { w: 'warrior', a: 'archer', n: 'necro', h: 'healer', k: 'king' };
+
+export const TILE = { FLOOR: 0, WALL: 1, PROP: 2, PILLAR: 3, VOID: 4, GATE: 5 } as const;
+export type Tile = typeof TILE[keyof typeof TILE];
+
+export interface Spawn { type: EnemyType; x: number; z: number }
+
+export interface Gate {
+  obj: THREE.Object3D;
+  bars: THREE.Object3D;
+  x: number; z: number; r: number;
+  closed: boolean;
+  t: number;
+  anim?: number;
+  room: Room;
+}
+
+export interface Room {
+  index: number;
+  rowTop: number; rowBottom: number;
+  zTop: number; zBottom: number;
+  center: THREE.Vector3;
+  chest: XZ;          // where the reward chest lands
+  chestSpot?: XZ;     // '*' in the map, if any
+  spawns: Spawn[];
+  gates: Gate[];
+  cleared: boolean;
+  active?: boolean;
+  spawned?: boolean;
+}
+
+export interface Prop {
+  name: string;
+  obj: THREE.Object3D;
+  c: number; r: number; x: number; z: number;
+  hp: number;
+  breakable: boolean;
+  room?: Room;
+  light?: LightSource;
+}
+
+export interface Torch {
+  x: number; y: number; z: number;
+  room?: Room;
+  brazier?: boolean;
+  phase: number;
+  obj?: THREE.Object3D;
+  pool?: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+  sprite?: THREE.Sprite;
+}
+
+export interface Spikes {
+  obj: THREE.Object3D;
+  spikes: THREE.Object3D;
+  x: number; z: number;
+  room: Room;
+  up: number;
+  phase: number;
+}
+
+interface PropOptions { solid?: boolean; breakable?: number; rot?: number; glow?: number; fire?: boolean }
 
 export class World {
-  constructor(scene) {
+  scene: THREE.Scene;
+  group = new THREE.Group();
+  lines: string[] = [];
+  /** Indexed by room number 1..6 (index 0 is empty). */
+  rooms: (Room | undefined)[] = [];
+  W: number; H: number;
+  half: number;
+  zOff: number;
+  grid: Uint8Array;
+  props = new Map<number, Prop>(); // cell -> prop object
+  spikes: Spikes[] = [];
+  torches: Torch[] = [];
+  lights: LightSource[] = []; // light sources picked up by the LightPool
+  start = new THREE.Vector3();
+  rune?: THREE.Mesh;
+  exitDoor!: THREE.Object3D;
+  exitLeaves!: [THREE.Object3D, THREE.Object3D];
+  exitLight!: LightSource;
+  exitOpen = false;
+  private _flow = new Map<string, { t: number; d: Int16Array }>();
+
+  constructor(scene: THREE.Scene) {
     this.scene = scene;
-    this.group = new THREE.Group();
     scene.add(this.group);
     const parts = [ROOM6, CORR, ROOM5, CORR, ROOM4, CORR, ROOM3, CORR, ROOM2, CORR, ROOM1];
     const roomOrder = [6, null, 5, null, 4, null, 3, null, 2, null, 1];
-    this.lines = [];
-    this.rooms = [];
     let row = 0;
     parts.forEach((p, i) => {
       const idx = roomOrder[i];
-      if (idx) this.rooms[idx] = { index: idx, rowTop: row, rowBottom: row + p.length - 1, spawns: [], torches: [], gates: [], cleared: idx === 1, props: [] };
+      if (idx) {
+        this.rooms[idx] = {
+          index: idx, rowTop: row, rowBottom: row + p.length - 1, spawns: [], gates: [], cleared: idx === 1,
+          zTop: 0, zBottom: 0, center: new THREE.Vector3(), chest: { x: 0, z: 0 }, // filled in build()
+        };
+      }
       p.forEach((l) => this.lines.push(l));
       row += p.length;
     });
@@ -146,31 +231,32 @@ export class World {
     this.half = this.W / 2;
     this.zOff = -(this.H - 6); // put the start room near z=0
     this.grid = new Uint8Array(this.W * this.H);
-    this.props = new Map(); // cell -> prop object
-    this.spikes = [];
-    this.torches = [];
-    this.lights = []; // light sources picked up by the LightPool (torches are added separately)
     this.build();
   }
 
-  cx(col) { return col - this.half + 0.5; }
-  cz(row) { return row + this.zOff; }
-  col(x) { return Math.floor(x + this.half); }
-  row(z) { return Math.floor(z - this.zOff + 0.5); }
-  idx(c, r) { return r * this.W + c; }
-  cell(x, z) { return [this.col(x), this.row(z)]; }
+  /** The Skeleton King's room (room 6, at the top of the map). */
+  get bossRoom(): Room { return this.rooms[6]!; }
 
-  tileAt(c, r) {
+  cx(col: number) { return col - this.half + 0.5; }
+  cz(row: number) { return row + this.zOff; }
+  col(x: number) { return Math.floor(x + this.half); }
+  row(z: number) { return Math.floor(z - this.zOff + 0.5); }
+  idx(c: number, r: number) { return r * this.W + c; }
+  cell(x: number, z: number): [number, number] { return [this.col(x), this.row(z)]; }
+
+  tileAt(c: number, r: number): number {
     if (c < 0 || r < 0 || c >= this.W || r >= this.H) return TILE.VOID;
     return this.grid[this.idx(c, r)];
   }
-  solidAt(x, z) { const t = this.tileAt(this.col(x), this.row(z)); return t !== TILE.FLOOR; }
-  blocksShot(x, z) { const t = this.tileAt(this.col(x), this.row(z)); return t === TILE.WALL || t === TILE.PILLAR || t === TILE.PROP || t === TILE.GATE || t === TILE.VOID; }
+  solidAt(x: number, z: number) { const t = this.tileAt(this.col(x), this.row(z)); return t !== TILE.FLOOR; }
+  blocksShot(x: number, z: number) { const t = this.tileAt(this.col(x), this.row(z)); return t === TILE.WALL || t === TILE.PILLAR || t === TILE.PROP || t === TILE.GATE || t === TILE.VOID; }
 
-  roomAtRow(r) { return this.rooms.find((rm) => rm && r >= rm.rowTop && r <= rm.rowBottom); }
+  roomAtRow(r: number) { return this.rooms.find((rm) => rm && r >= rm.rowTop && r <= rm.rowBottom); }
 
   build() {
-    const floorT = [], floorB = [], walls = [], lowWalls = [], voids = [];
+    const floorT: InstanceTransform[] = [], floorB: InstanceTransform[] = [];
+    const walls: InstanceTransform[] = [], lowWalls: InstanceTransform[] = [];
+    const voids: { x: number; z: number; low: boolean }[] = [];
     const rand = mulberry(12345);
     for (let r = 0; r < this.H; r++) {
       const line = this.lines[r];
@@ -178,7 +264,7 @@ export class World {
       for (let c = 0; c < this.W; c++) {
         const ch = line[c] || ' ';
         const x = this.cx(c), z = this.cz(r);
-        let t = TILE.FLOOR;
+        let t: Tile = TILE.FLOOR;
         const floorHere = ch !== ' ' && ch !== '#' && ch !== 'T' && ch !== 'N' && ch !== 'E';
         if (floorHere || ch === 'E') {
           const shade = 0.88 + rand() * 0.2;
@@ -200,7 +286,7 @@ export class World {
             else walls.push({ x, z, color: new THREE.Color(v, v, v) });
             if (ch === 'T' || ch === 'N') {
               // facing: toward floor neighbour
-              let dir = { x: 0, z: 1 };
+              let dir: XZ;
               if (below && below !== '#' && below !== ' ') dir = { x: 0, z: 1 };
               else if (above && above !== '#' && above !== ' ') dir = { x: 0, z: -1 };
               else if (line[c + 1] && line[c + 1] !== '#' && line[c + 1] !== ' ') dir = { x: 1, z: 0 };
@@ -218,12 +304,13 @@ export class World {
           case 'S': this.addSpikes(c, r); break;
           case 'b': this.addDeco('T_Bones', x, z, rand() * 6); break;
           case 'r': this.addRune(0, z); break;
-          case '@': this.start = new THREE.Vector3(x + 0.5, 0, z); break;
-          case '*': room.chest = { x: x + 0.5, z }; break;
-          case 'g': if (c === this.half - 1) this.addGate(room, x + 0.5, z, r); break;
+          case '@': this.start.set(x + 0.5, 0, z); break;
+          // the codes below only appear inside rooms
+          case '*': room!.chestSpot = { x: x + 0.5, z }; break;
+          case 'g': if (c === this.half - 1) this.addGate(room!, x + 0.5, z, r); break;
           case 'd': break;
           case 'w': case 'a': case 'n': case 'h': case 'k':
-            room.spawns.push({ type: { w: 'warrior', a: 'archer', n: 'necro', h: 'healer', k: 'king' }[ch], x, z }); break;
+            room!.spawns.push({ type: SPAWN_CODES[ch], x, z }); break;
           default: break;
         }
         this.grid[this.idx(c, r)] = t;
@@ -240,27 +327,27 @@ export class World {
       if (!rm) continue;
       rm.zTop = this.cz(rm.rowTop); rm.zBottom = this.cz(rm.rowBottom);
       rm.center = new THREE.Vector3(0, 0, (rm.zTop + rm.zBottom) / 2);
-      rm.chest = rm.chest || { x: 0, z: rm.center.z };
+      rm.chest = rm.chestSpot || { x: 0, z: rm.center.z };
     }
     // boss room: rug + exit door
-    const boss = this.rooms[6];
+    const boss = this.bossRoom;
     const rug = clone('T_Rug'); rug.position.set(0, 0.005, boss.center.z - 1.5); rug.scale.set(1.1, 1, 1.3); this.group.add(rug);
     this.exitDoor = clone('T_ExitDoor');
     this.exitDoor.position.set(0, 0, boss.zTop + 0.35);
     this.group.add(this.exitDoor);
-    this.exitLeaves = [this.exitDoor.getObjectByName('T_ExitDoor_LeafL'), this.exitDoor.getObjectByName('T_ExitDoor_LeafR')];
+    this.exitLeaves = [this.exitDoor.getObjectByName('T_ExitDoor_LeafL')!, this.exitDoor.getObjectByName('T_ExitDoor_LeafR')!];
     this.exitLight = this.addLight(0, 1.5, boss.zTop + 1.2, 0x3a8aff, 0, 7);
     // ambient floor glows from the void edges
     this.addVoidDust();
   }
 
-  addProp(name, c, r, opt) {
+  addProp(name: string, c: number, r: number, opt: PropOptions) {
     const o = clone(name);
     const x = this.cx(c), z = this.cz(r);
     o.position.set(x, 0, z);
     if (opt.rot) o.rotation.y = opt.rot;
     this.group.add(o);
-    const p = { name, obj: o, c, r, x, z, hp: opt.breakable || 0, breakable: !!opt.breakable, room: this.roomAtRow(r) };
+    const p: Prop = { name, obj: o, c, r, x, z, hp: opt.breakable || 0, breakable: !!opt.breakable, room: this.roomAtRow(r) };
     this.props.set(this.idx(c, r), p);
     if (opt.glow) {
       p.light = this.addLight(x, 1.0, z, opt.glow, 3, 5);
@@ -269,9 +356,9 @@ export class World {
     return p;
   }
 
-  addDeco(name, x, z, ry) { const o = clone(name); o.position.set(x, 0, z); o.rotation.y = ry; this.group.add(o); }
+  addDeco(name: string, x: number, z: number, ry: number) { const o = clone(name); o.position.set(x, 0, z); o.rotation.y = ry; this.group.add(o); }
 
-  addRune(x, z) {
+  addRune(x: number, z: number) {
     const m = new THREE.MeshBasicMaterial({ map: TEX.rune, color: 0x3a8aff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0.9 });
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6).rotateX(-Math.PI / 2), m);
     mesh.position.set(x, 0.02, z);
@@ -281,17 +368,17 @@ export class World {
   }
 
   /** Register a light source; the LightPool decides which ones get a real light each frame. */
-  addLight(x, y, z, color, intensity, range) {
+  addLight(x: number, y: number, z: number, color: THREE.ColorRepresentation, intensity: number, range: number): LightSource {
     const s = { x, y, z, color: new THREE.Color(color), intensity, range, flicker: false };
     this.lights.push(s);
     return s;
   }
 
   /** Solid dark rock over every empty tile and around the map, so nothing outside the rooms is ever empty. */
-  addRock(voids) {
+  addRock(voids: { x: number; z: number; low: boolean }[]) {
     const mat = new THREE.MeshLambertMaterial({ color: 0x12151f });
-    const geos = [];
-    const quad = (x0, z0, x1, z1, y) => {
+    const geos: THREE.BufferGeometry[] = [];
+    const quad = (x0: number, z0: number, x1: number, z1: number, y: number) => {
       const g = new THREE.PlaneGeometry(x1 - x0, z1 - z0).rotateX(-Math.PI / 2);
       g.translate((x0 + x1) / 2, y, (z0 + z1) / 2);
       geos.push(g);
@@ -308,7 +395,7 @@ export class World {
     this.group.add(mesh);
   }
 
-  addTorch(x, z, dir, room) {
+  addTorch(x: number, z: number, dir: XZ, room: Room | undefined) {
     const o = clone('T_Torch');
     o.position.set(x, 0.8, z);
     o.rotation.y = Math.atan2(dir.x, dir.z) + Math.PI; // model faces -Y(blender) => +Z; mount points out of wall
@@ -317,41 +404,41 @@ export class World {
     this.addTorchLight({ x: fx, y: 1.02, z: fz, room, phase: Math.random() * 10, obj: o });
   }
 
-  addTorchLight(t) {
+  addTorchLight(t: Torch) {
     this.torches.push(t);
     // the real light sits a bit above and in front of the flame
     this.lights.push({ x: t.x, y: t.y + 0.35, z: t.z, color: new THREE.Color(t.brazier ? 0xff8a34 : 0xff9a40), intensity: t.brazier ? 8 : 7, range: 6.5, flicker: true, phase: t.phase });
   }
 
-  addBanner(x, z, dir) {
+  addBanner(x: number, z: number, dir: XZ) {
     const o = clone('T_Banner');
     o.position.set(x, 1.15, z);
     o.rotation.y = Math.atan2(dir.x, dir.z) + Math.PI;
     this.group.add(o);
   }
 
-  addSpikes(c, r) {
+  addSpikes(c: number, r: number) {
     const o = clone('T_Spikes');
     const x = this.cx(c), z = this.cz(r);
     o.position.set(x, 0, z);
     this.group.add(o);
-    const sp = o.getObjectByName('T_Spikes_Spikes');
-    this.spikes.push({ obj: o, spikes: sp, x, z, room: this.roomAtRow(r), up: 0, phase: (c % 2) * 0.0 });
+    const sp = o.getObjectByName('T_Spikes_Spikes')!;
+    this.spikes.push({ obj: o, spikes: sp, x, z, room: this.roomAtRow(r)!, up: 0, phase: (c % 2) * 0.0 });
     sp.position.y = -0.3;
   }
 
-  addGate(room, x, z, r) {
+  addGate(room: Room, x: number, z: number, r: number) {
     const o = clone('T_Gate');
     o.position.set(x, 0, z);
     this.group.add(o);
-    const bars = o.getObjectByName('T_Gate_Bars');
-    const gate = { obj: o, bars, x, z, r, closed: false, t: 0, room };
+    const bars = o.getObjectByName('T_Gate_Bars')!;
+    const gate: Gate = { obj: o, bars, x, z, r, closed: false, t: 0, room };
     bars.position.y = 1.4; // open (raised into wall)
     bars.visible = false;
     room.gates.push(gate);
   }
 
-  setGate(gate, closed) {
+  setGate(gate: Gate, closed: boolean) {
     gate.closed = closed;
     for (const c of [this.half - 1, this.half]) this.grid[this.idx(c, gate.r)] = closed ? TILE.GATE : TILE.FLOOR;
     gate.bars.visible = true;
@@ -359,7 +446,7 @@ export class World {
 
   openExit() {
     this.exitOpen = true;
-    for (const c of [this.half - 1, this.half]) this.grid[this.idx(c, this.rooms[6].rowTop)] = TILE.FLOOR;
+    for (const c of [this.half - 1, this.half]) this.grid[this.idx(c, this.bossRoom.rowTop)] = TILE.FLOOR;
   }
 
   addVoidDust() {
@@ -378,16 +465,16 @@ export class World {
     }
   }
 
-  breakProp(p) {
+  breakProp(p: Prop) {
     this.props.delete(this.idx(p.c, p.r));
     this.grid[this.idx(p.c, p.r)] = TILE.FLOOR;
     this.group.remove(p.obj);
   }
 
-  propAt(x, z) { return this.props.get(this.idx(this.col(x), this.row(z))); }
+  propAt(x: number, z: number) { return this.props.get(this.idx(this.col(x), this.row(z))); }
 
   /** Push a circle out of solid tiles. Returns true if collided. */
-  collide(pos, rad) {
+  collide(pos: THREE.Vector3, rad: number) {
     let hit = false;
     const c0 = this.col(pos.x), r0 = this.row(pos.z);
     for (let r = r0 - 1; r <= r0 + 1; r++) {
@@ -407,7 +494,8 @@ export class World {
     return hit;
   }
 
-  los(a, b) {
+  /** Line of sight on the ground plane (shots stop at walls, pillars, props and gates). */
+  los(a: XZ, b: XZ) {
     const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
     const n = Math.ceil(d / 0.25);
     for (let i = 1; i < n; i++) {
@@ -418,10 +506,9 @@ export class World {
   }
 
   /** BFS distance field to target cell (cached per frame-ish). */
-  flow(tc, tr) {
+  flow(tc: number, tr: number) {
     const key = tc + ',' + tr;
     const now = performance.now();
-    this._flow = this._flow || new Map();
     const cached = this._flow.get(key);
     if (cached && now - cached.t < 250) return cached.d;
     const d = new Int16Array(this.W * this.H).fill(-1);
@@ -438,12 +525,12 @@ export class World {
       }
     }
     this._flow.set(key, { t: now, d });
-    if (this._flow.size > 40) this._flow.delete(this._flow.keys().next().value);
+    if (this._flow.size > 40) this._flow.delete(this._flow.keys().next().value!);
     return d;
   }
 
   /** Direction (x,z normalized) to walk from pos toward target using the flow field. */
-  pathDir(pos, target, out) {
+  pathDir(pos: THREE.Vector3, target: THREE.Vector3, out: THREE.Vector3) {
     const [tc, tr] = this.cell(target.x, target.z);
     if (this.los(pos, target) && this.clearPath(pos, target)) {
       out.set(target.x - pos.x, 0, target.z - pos.z); const l = out.length(); if (l > 1e-4) out.multiplyScalar(1 / l); return out;
@@ -463,7 +550,7 @@ export class World {
     return out;
   }
 
-  clearPath(a, b) {
+  clearPath(a: XZ, b: XZ) {
     // wide check for walkers (radius ~0.3)
     const dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
     if (d < 0.01) return true;
@@ -477,7 +564,7 @@ export class World {
     return true;
   }
 
-  randomFloorIn(room, rand = Math.random) {
+  randomFloorIn(room: Room, rand = Math.random) {
     for (let k = 0; k < 50; k++) {
       const r = room.rowTop + 1 + Math.floor(rand() * (room.rowBottom - room.rowTop - 1));
       const c = 1 + Math.floor(rand() * (this.W - 2));
@@ -486,15 +573,16 @@ export class World {
     return room.center.clone();
   }
 
-  floorCells(room) {
-    const out = [];
+  floorCells(room: Room) {
+    const out: THREE.Vector3[] = [];
     for (let r = room.rowTop + 1; r < room.rowBottom; r++)
       for (let c = 1; c < this.W - 1; c++) if (this.tileAt(c, r) === TILE.FLOOR) out.push(new THREE.Vector3(this.cx(c), 0, this.cz(r)));
     return out;
   }
 }
 
-export function mulberry(a) {
+/** Small seeded random generator (same level look every run). */
+export function mulberry(a: number) {
   return function () {
     a |= 0; a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);

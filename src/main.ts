@@ -3,12 +3,12 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { loadAssets, renderIcons } from './assets.js';
-import { Input } from './input.js';
-import { Game } from './game.js';
-import { UI } from './ui.js';
-import { audio } from './audio.js';
-import { WEAPONS } from './config.js';
+import { loadAssets, renderIcons } from './assets';
+import { Input } from './input';
+import { Game } from './game';
+import { UI } from './ui';
+import { audio } from './audio';
+import { WEAPONS } from './config';
 
 // Phone-only game. Opened on a computer, it shows itself inside a phone-sized frame.
 const params = new URLSearchParams(location.search);
@@ -18,7 +18,7 @@ if (!isPhone && window.self === window.top && !params.has('full')) {
   throw new Error('desktop: running inside a phone frame');
 }
 
-const canvas = document.getElementById('game');
+const canvas = document.getElementById('game') as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -43,8 +43,8 @@ const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.45, 0.4, 0.9);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
-const bar = document.querySelector('#loading .ld-bar i');
-let game = null;
+const bar = document.querySelector<HTMLElement>('#loading .ld-bar i')!;
+let game: Game | null = null;
 
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
@@ -64,25 +64,25 @@ async function boot() {
   const heroIcon = renderIcons(['Hero'], { rot: [0.15, -0.35, 0], size: 200, zoom: 0.6, focusTop: 0.55 }).Hero;
   const ui = new UI(icons, heroIcon);
   const input = new Input(canvas);
-  game = new Game({ scene, camera, input, ui });
-  window.__game = game; // debug hook
+  const g = game = new Game({ scene, camera, input, ui });
+  window.__game = g; window.__renderer = renderer; // debug hooks
   resize();
   // pre-compile shaders so the first hit doesn't hitch
   renderer.compile(scene, camera);
   bar.style.width = '100%';
-  setTimeout(() => document.getElementById('loading').classList.add('done'), 150);
+  setTimeout(() => document.getElementById('loading')!.classList.add('done'), 150);
   // sound and music start on the very first tap anywhere (capture phase, so buttons count too)
   const startSound = () => { audio.unlock(); audio.musicOn(true); };
   for (const ev of ['pointerdown', 'touchstart', 'touchend', 'click', 'keydown']) window.addEventListener(ev, startSound, { capture: true, once: true });
-  game.start();
+  g.start();
   let last = performance.now();
-  function frame(now) {
+  function frame(now: number) {
     if (window.__pause) { requestAnimationFrame(frame); return; }
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    game.update(dt);
-    key.position.set(game.camTarget.x - 4, 10, game.camTarget.z + 6);
-    key.target.position.copy(game.camTarget);
+    g.update(dt);
+    key.position.set(g.camTarget.x - 4, 10, g.camTarget.z + 6);
+    key.target.position.copy(g.camTarget);
     composer.render();
     requestAnimationFrame(frame);
   }
@@ -90,7 +90,7 @@ async function boot() {
   // debug: advance the simulation deterministically (for automated QA)
   window.__step = (sec, fps = 60) => {
     const n = Math.round(sec * fps);
-    for (let i = 0; i < n; i++) game.update(1 / fps);
+    for (let i = 0; i < n; i++) g.update(1 / fps);
     composer.render();
     last = performance.now();
   };
@@ -109,5 +109,5 @@ async function boot() {
 
 boot().catch((e) => {
   console.error(e);
-  document.querySelector('#loading .ld-title').textContent = 'Failed to load';
+  document.querySelector('#loading .ld-title')!.textContent = 'Failed to load';
 });

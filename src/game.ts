@@ -1,42 +1,118 @@
 import * as THREE from 'three';
-import { clone } from './assets.js';
-import { Player } from './player.js';
-import { Enemy } from './enemies.js';
-import { World } from './world.js';
-import { FX, TEX } from './fx.js';
-import { audio } from './audio.js';
-import { LightPool } from './lights.js';
-import { WEAPONS, CHEST_WEAPONS, BUFFS, CHAR_SCALE } from './config.js';
+import { clone } from './assets';
+import { Player } from './player';
+import { Enemy } from './enemies';
+import { World, type Prop, type Room, type Spawn } from './world';
+import { FX, TEX, type TimedItem, type XYZ, type XZ } from './fx';
+import { audio } from './audio';
+import { LightPool, type LightSource } from './lights';
+import type { Input } from './input';
+import type { UI } from './ui';
+import {
+  WEAPONS, CHEST_WEAPONS, BUFFS, CHAR_SCALE,
+  type BuffId, type DotEffect, type EnemyType, type SlowEffect, type WeaponDef, type WeaponId,
+} from './config';
 
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
 const _u = new THREE.Vector3();
-const rnd = (a, b) => a + Math.random() * (b - a);
-const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const rnd = (a: number, b: number) => a + Math.random() * (b - a);
+const shuffle = <T>(a: T[]): T[] => { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+/** Everything a hit can carry: knockback, status effects, where it came from. */
+export interface HitInfo {
+  knock?: number;
+  weapon?: WeaponId;
+  dir?: THREE.Vector3;
+  dot?: boolean;     // damage-over-time tick (no crit, no knockback, small number)
+  color?: string;    // dot number colour
+  light?: boolean;   // fast weapon: smaller hit-stop and shake
+  burn?: DotEffect;
+  poison?: DotEffect;
+  slow?: SlowEffect;
+  stun?: number;
+}
+
+export type Reward = 'weapon' | 'buff' | 'mimic';
+
+interface ProjectileBase { obj: THREE.Object3D; pos: THREE.Vector3; dmg: number; life: number; radius: number; age: number }
+/** Necromancer orb: flies in an arc to a marked spot and explodes there. */
+interface OrbProjectile extends ProjectileBase { owner: 'enemy'; kind: 'orb'; from: THREE.Vector3; target: THREE.Vector3; aoe: number; flight: number; tele: TimedItem }
+interface EnemyShot extends ProjectileBase { owner: 'enemy'; kind: 'arrow' | 'crescent' | 'bullet'; vel: THREE.Vector3 }
+interface PlayerShot extends ProjectileBase { owner: 'player'; kind: 'ice' | 'lightning'; vel: THREE.Vector3; w: WeaponDef; trailT: number; wob: number; prev: THREE.Vector3 }
+type Projectile = OrbProjectile | EnemyShot | PlayerShot;
+type EnemyShotKind = OrbProjectile['kind'] | EnemyShot['kind'];
+
+interface EnemyShotOpts { speed: number; dmg: number; target?: THREE.Vector3; radius?: number }
+
+interface CoinPickup { kind: 'coin'; obj: THREE.Object3D; pos: THREE.Vector3; vel: THREE.Vector3; age: number }
+interface WeaponPickup { kind: 'weapon'; id: WeaponId; obj: THREE.Object3D; ring: THREE.Mesh; pos: THREE.Vector3; from: THREE.Vector3; age: number }
+type Pickup = CoinPickup | WeaponPickup;
+
+interface Debris { obj: THREE.Object3D; vel: THREE.Vector3; life: number; max: number; av: THREE.Vector3; small: boolean; s0: THREE.Vector3 }
+
+interface Chest {
+  obj: THREE.Object3D;
+  pos: THREE.Vector3;
+  lid: THREE.Object3D;
+  reward: Reward;
+  state: 'drop' | 'closed' | 'opening';
+  t: number;
+  room: Room;
+  light?: LightSource;
+  popped?: boolean;
+}
+
+/** What the camera sees on the ground, relative to its target (set in resize). */
+interface View { top: number; bottom: number; halfTop: number; ahead: number }
+
+export interface GameDeps { scene: THREE.Scene; camera: THREE.PerspectiveCamera; input: Input; ui: UI }
 
 export class Game {
-  constructor({ scene, camera, input, ui }) {
+  scene: THREE.Scene;
+  camera: THREE.PerspectiveCamera;
+  input: Input;
+  ui: UI;
+  time = 0;
+  fx: FX;
+  world: World;
+  enemies: Enemy[] = [];
+  projectiles: Projectile[] = [];
+  pickups: Pickup[] = [];
+  debris: Debris[] = [];
+  chests: Chest[] = [];
+  player: Player;
+  currentRoom = 1;
+  activeRoom: Room | null = null;
+  over = false;
+  paused = false;
+  boss: Enemy | null = null;
+  camPos = new THREE.Vector3();
+  camTarget: THREE.Vector3;
+  camFocus: { pos: THREE.Vector3; t: number } | null = null;
+  camOffset = { x: 0, y: 0, z: 0 };
+  camReady = false;
+  view: View | null = null;
+  weaponPool: WeaponId[];
+  rewards: Partial<Record<number, Reward>>;
+  tutorial = { moved: false, stopHint: false, dodgeHint: false };
+  swapHinted = false;
+  exitAnim = 0;
+  lights: LightPool;
+  coinGeo: THREE.BufferGeometry;
+  coinMat: THREE.MeshStandardMaterial;
+  W: number; H: number;
+
+  constructor({ scene, camera, input, ui }: GameDeps) {
     this.scene = scene; this.camera = camera; this.input = input; this.ui = ui;
-    this.time = 0;
     this.fx = new FX(scene, camera);
     this.world = new World(scene);
-    this.enemies = [];
-    this.projectiles = [];
-    this.pickups = [];
-    this.debris = [];
-    this.chests = [];
     this.player = new Player(this);
-    this.currentRoom = 1;
-    this.activeRoom = null;
-    this.over = false;
-    this.camPos = new THREE.Vector3();
     this.camTarget = this.player.pos.clone();
-    this.camFocus = null; // {pos, t}
     this.weaponPool = shuffle([...CHEST_WEAPONS]);
     this.rewards = { 2: 'weapon' };
-    const r = shuffle(['buff', 'weapon', 'mimic']);
+    const r = shuffle<Reward>(['buff', 'weapon', 'mimic']);
     this.rewards[3] = r[0]; this.rewards[4] = r[1]; this.rewards[5] = r[2];
-    this.tutorial = { moved: false, stopHint: false, dodgeHint: false };
     this.lights = new LightPool(scene, 8);
     for (const s of this.world.lights) this.lights.add(s);
     this.coinGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.035, 10).rotateZ(Math.PI / 2);
@@ -52,7 +128,7 @@ export class Game {
   }
 
   // ================= combat =================
-  meleeHit(origin, dir, range, arc, dmg, opts) {
+  meleeHit(origin: THREE.Vector3, dir: XZ, range: number, arc: number, dmg: number, opts: HitInfo) {
     let hits = 0;
     const face = Math.atan2(dir.x, dir.z);
     for (const e of this.enemies) {
@@ -74,7 +150,7 @@ export class Game {
     return hits;
   }
 
-  aoeHit(c, radius, dmg, opts) {
+  aoeHit(c: THREE.Vector3, radius: number, dmg: number, opts: HitInfo) {
     let hits = 0;
     for (const e of this.enemies) {
       if (e.dead || !e.targetable) continue;
@@ -89,7 +165,7 @@ export class Game {
     if (hits) this.fx.hitstop(40);
   }
 
-  hitProps(origin, dir, range, arc) {
+  hitProps(origin: XZ, dir: XZ, range: number, arc: number) {
     const face = Math.atan2(dir.x, dir.z);
     for (const p of [...this.world.props.values()]) {
       if (!p.breakable) continue;
@@ -100,7 +176,7 @@ export class Game {
     }
   }
 
-  damageProp(p, n) {
+  damageProp(p: Prop, n: number) {
     p.hp -= n;
     const c = p.name === 'T_Crate' ? 0x8a5a34 : 0x7a4a2a;
     audio.play('hit', { pitch: 0.6 });
@@ -124,7 +200,7 @@ export class Game {
     }
   }
 
-  damageEnemy(e, dmg, info = {}) {
+  damageEnemy(e: Enemy, dmg: number, info: HitInfo = {}) {
     if (e.dead) return;
     let amount = dmg, crit = false;
     if (!info.dot && Math.random() < 0.15) { amount *= 1.7; crit = true; }
@@ -162,7 +238,7 @@ export class Game {
     if (e.hp <= 0) this.killEnemy(e, info);
   }
 
-  killEnemy(e, info) {
+  killEnemy(e: Enemy, info?: HitInfo) {
     e.dead = true; e.hp = 0;
     e.cleanupTele();
     audio.play('kill'); audio.play('crunch');
@@ -178,11 +254,12 @@ export class Game {
     // explode the rig into flying parts
     const dir = info?.dir || new THREE.Vector3(0, 0, -1);
     if (e.rig) {
-      const parts = [e.rig.head, e.rig.armL, e.rig.armR, e.rig.legL, e.rig.legR, e.rig.body, e.rig.cape].filter(Boolean);
+      const rig = e.rig;
+      const parts = [rig.head, rig.armL, rig.armR, rig.legL, rig.legR, rig.body, rig.cape].filter((o) => o !== undefined);
       for (const part of parts) {
         this.scene.attach(part);
         const v = new THREE.Vector3(dir.x * rnd(2, 5) + rnd(-2.5, 2.5), rnd(3, 7), dir.z * rnd(2, 5) + rnd(-2.5, 2.5));
-        if (part === e.rig.head) v.y += 2;
+        if (part === rig.head) v.y += 2;
         this.addDebris(part, v, 1.6);
       }
     } else {
@@ -196,11 +273,11 @@ export class Game {
     if (e.type === 'mimic') this.onMimicDeath(e);
   }
 
-  addDebris(obj, vel, life, small = false) {
+  addDebris(obj: THREE.Object3D, vel: THREE.Vector3, life: number, small = false) {
     this.debris.push({ obj, vel, life, max: life, av: new THREE.Vector3(rnd(-12, 12), rnd(-12, 12), rnd(-12, 12)), small, s0: obj.scale.clone() });
   }
 
-  dropCoins(pos, n) {
+  dropCoins(pos: XZ, n: number) {
     for (let i = 0; i < n; i++) {
       const m = new THREE.Mesh(this.coinGeo, this.coinMat);
       m.position.set(pos.x, 0.5, pos.z);
@@ -210,8 +287,8 @@ export class Game {
   }
 
   // ================= projectiles =================
-  shootPlayer(kind, from, dir, dmg, w) {
-    let obj;
+  shootPlayer(kind: PlayerShot['kind'], from: THREE.Vector3, dir: THREE.Vector3, dmg: number, w: WeaponDef) {
+    let obj: THREE.Object3D;
     if (kind === 'ice') { obj = clone('P_IceArrow'); obj.scale.setScalar(1.3); }
     else {
       const m = new THREE.SpriteMaterial({ map: TEX.glow, color: 0xb08aff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
@@ -221,11 +298,11 @@ export class Game {
     }
     obj.position.copy(from);
     this.scene.add(obj);
-    this.projectiles.push({ owner: 'player', kind, obj, pos: obj.position, vel: dir.clone().multiplyScalar(w.speed), dmg, w, life: 1.6, radius: 0.28, trailT: 0, wob: Math.random() * 6, prev: from.clone() });
+    this.projectiles.push({ owner: 'player', kind, obj, pos: obj.position, vel: dir.clone().multiplyScalar(w.speed!), dmg, w, life: 1.6, radius: 0.28, trailT: 0, wob: Math.random() * 6, prev: from.clone(), age: 0 });
   }
 
-  shootEnemy(kind, from, dir, o) {
-    let obj, radius = 0.2, life = 3;
+  shootEnemy(kind: EnemyShotKind, from: THREE.Vector3, dir: THREE.Vector3 | null, o: EnemyShotOpts) {
+    let obj: THREE.Object3D, radius = 0.2, life = 3;
     if (kind === 'arrow') { obj = clone('P_Arrow'); obj.scale.setScalar(1.4); radius = 0.2; audio.play('arrowFly'); }
     else if (kind === 'orb') {
       obj = clone('W_NecroOrb'); obj.scale.setScalar(1.6);
@@ -245,27 +322,29 @@ export class Game {
     }
     obj.position.copy(from);
     this.scene.add(obj);
-    const p = { owner: 'enemy', kind, obj, pos: obj.position, dmg: o.dmg, life, radius, age: 0 };
+    const base = { owner: 'enemy' as const, obj, pos: obj.position, dmg: o.dmg, life, radius, age: 0 };
     if (kind === 'orb') {
-      p.from = from.clone(); p.target = o.target.clone(); p.aoe = o.radius;
-      p.flight = Math.max(0.7, from.distanceTo(o.target) / o.speed);
-      p.tele = this.fx.telegraph({ shape: 'circle', pos: o.target, radius: o.radius, time: p.flight, color: 0xb040ff });
+      // orbs always come with a target spot and blast radius
+      const target = o.target!.clone(), aoe = o.radius!;
+      const flight = Math.max(0.7, from.distanceTo(target) / o.speed);
+      const tele = this.fx.telegraph({ shape: 'circle', pos: target, radius: aoe, time: flight, color: 0xb040ff });
+      this.projectiles.push({ ...base, kind, from: from.clone(), target, aoe, flight, tele });
     } else {
-      p.vel = dir.clone().multiplyScalar(o.speed);
+      const d = dir!;
       // the crescent texture's curved edge points to -Z, so turn it around to lead with the blade
-      if (kind === 'arrow') obj.rotation.y = Math.atan2(dir.x, dir.z);
-      else if (kind === 'crescent') obj.rotation.y = Math.atan2(dir.x, dir.z) + Math.PI;
+      if (kind === 'arrow') obj.rotation.y = Math.atan2(d.x, d.z);
+      else if (kind === 'crescent') obj.rotation.y = Math.atan2(d.x, d.z) + Math.PI;
+      this.projectiles.push({ ...base, kind, vel: d.clone().multiplyScalar(o.speed) });
     }
-    this.projectiles.push(p);
   }
 
-  updateProjectiles(dt) {
+  updateProjectiles(dt: number) {
     const P = this.player;
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
-      p.life -= dt; p.age = (p.age || 0) + dt;
+      p.life -= dt; p.age += dt;
       let dead = p.life <= 0;
-      if (p.owner === 'enemy' && p.kind === 'orb') {
+      if (p.kind === 'orb') {
         const k = Math.min(1, p.age / p.flight);
         p.pos.lerpVectors(p.from, p.target, k);
         p.pos.y = p.from.y * (1 - k) + Math.sin(k * Math.PI) * 2.2 + 0.3 * k;
@@ -282,7 +361,7 @@ export class Game {
           if (P.pos.distanceTo(p.target) < p.aoe + P.radius * 0.5) P.hurt(p.dmg, p.target);
         }
       } else {
-        p.prev?.copy(p.pos);
+        if (p.owner === 'player') p.prev.copy(p.pos);
         if (p.kind === 'lightning') {
           // slightly wavy magic bolt
           p.wob += dt * 20;
@@ -295,7 +374,7 @@ export class Game {
           dead = true;
           const prop = this.world.propAt(p.pos.x, p.pos.z);
           if (prop && prop.breakable && p.owner === 'player') this.damageProp(prop, 1);
-          this.fx.spark(p.pos, p.owner === 'player' ? (p.w?.color || '#fff') : 0xff6a4a, 6, 3);
+          this.fx.spark(p.pos, p.owner === 'player' ? (p.w.color || '#fff') : 0xff6a4a, 6, 3);
         }
         if (p.owner === 'enemy') {
           if (p.kind === 'crescent') { p.obj.scale.setScalar(1 + p.age * 0.5); }
@@ -313,7 +392,7 @@ export class Game {
             if (p.kind === 'ice') this.fx.burst(p.pos, { count: 2, color: 0x8fe6ff, speed: 0.3, life: 0.35, size: 0.18, gravity: 0.5, up: 0 });
             else this.fx.burst(p.pos, { count: 2, color: 0xa57bff, speed: 0.6, life: 0.3, size: 0.25, gravity: 0, up: 0 });
           }
-          if (p.kind === 'ice') p.obj.rotation.set(Math.PI / 2, 0, 0, 'YXZ'), p.obj.rotation.y = Math.atan2(p.vel.x, p.vel.z);
+          if (p.kind === 'ice') { p.obj.rotation.set(Math.PI / 2, 0, 0, 'YXZ'); p.obj.rotation.y = Math.atan2(p.vel.x, p.vel.z); }
           for (const e of this.enemies) {
             if (dead || e.dead || !e.targetable) continue;
             const dx = p.pos.x - e.pos.x, dz = p.pos.z - e.pos.z;
@@ -334,22 +413,23 @@ export class Game {
       }
       if (dead) {
         this.scene.remove(p.obj);
-        if (p.tele) this.fx.kill(p.tele);
+        if (p.kind === 'orb') this.fx.kill(p.tele);
         this.projectiles.splice(i, 1);
-      } else if (p.kind === 'arrow' && p.owner === 'enemy') {
+      } else if (p.kind === 'arrow') {
         p.obj.rotation.set(Math.PI / 2, 0, 0); p.obj.rotation.order = 'YXZ'; p.obj.rotation.y = Math.atan2(p.vel.x, p.vel.z);
       }
     }
   }
 
-  lightningHit(first, dmg, w, dir, at) {
+  lightningHit(first: Enemy, dmg: number, w: WeaponDef, dir: THREE.Vector3, at: THREE.Vector3) {
     audio.play('zapChain');
+    const chain = w.chain!;
     const hitList = [first];
     this.damageEnemy(first, dmg, { knock: w.knock, weapon: 'lightning', dir });
     let cur = first;
     const pts = [at, first.pos.clone().setY(0.7)];
-    for (let k = 0; k < w.chain.count; k++) {
-      let best = null, bd = w.chain.radius;
+    for (let k = 0; k < chain.count; k++) {
+      let best: Enemy | null = null, bd = chain.radius;
       for (const e of this.enemies) {
         if (e.dead || !e.targetable || hitList.includes(e)) continue;
         const d = e.pos.distanceTo(cur.pos);
@@ -359,7 +439,7 @@ export class Game {
       hitList.push(best);
       const from = cur.pos.clone().setY(0.7), to = best.pos.clone().setY(0.7);
       this.fx.bolt([from, to], { color: 0xa57bff, life: 0.28, width: 0.16 });
-      this.damageEnemy(best, w.chain.dmg * this.player.dmgMul, { knock: 1, weapon: 'lightning', dir: to.clone().sub(from).normalize() });
+      this.damageEnemy(best, chain.dmg * this.player.dmgMul, { knock: 1, weapon: 'lightning', dir: to.clone().sub(from).normalize() });
       this.fx.flash(to, { color: 0xc0a0ff, size: 1.6, life: 0.15 });
       cur = best;
     }
@@ -369,14 +449,14 @@ export class Game {
     this.fx.decal(first.pos, { tex: TEX.glow, size: 1.4, color: 0x8a5cff, life: 0.5 });
   }
 
-  spawnEnemy(type, x, z, room) {
+  spawnEnemy(type: EnemyType, x: number, z: number, room: Room) {
     const e = new Enemy(this, type, x, z, room);
     this.enemies.push(e);
     return e;
   }
 
   // ================= rooms & flow =================
-  updateRooms(dt) {
+  updateRooms(dt: number) {
     const P = this.player;
     const row = this.world.row(P.pos.z);
     const room = this.world.roomAtRow(row);
@@ -417,12 +497,12 @@ export class Game {
       if (target === 0 && Math.abs(P.pos.x - s.x) < 0.5 && Math.abs(P.pos.z - s.z) < 0.5) P.hurt(1, new THREE.Vector3(s.x, 0, s.z));
     }
     // exit door
-    if (this.world.exitOpen && !this.over && P.pos.z < this.world.rooms[6].zTop + 0.6) {
+    if (this.world.exitOpen && !this.over && P.pos.z < this.world.bossRoom.zTop + 0.6) {
       this.win();
     }
   }
 
-  beginRoom(room) {
+  beginRoom(room: Room) {
     room.active = true;
     this.activeRoom = room;
     this.player.cantDie = room.index === 2;
@@ -441,15 +521,15 @@ export class Game {
     });
   }
 
-  bossIntro(room, spawns) {
-    const ks = spawns.find((s) => s.type === 'king');
+  bossIntro(room: Room, spawns: Spawn[]) {
+    const ks = spawns.find((s) => s.type === 'king')!;
     this.camFocus = { pos: new THREE.Vector3(ks.x, 0, ks.z), t: 2.4 };
     this.input.enabled = false;
     setTimeout(() => {
       const k = this.spawnEnemy('king', ks.x, ks.z, room);
       this.boss = k;
       setTimeout(() => {
-        k.rig.play('roar'); audio.play('roar'); this.fx.shake(0.9);
+        k.rig!.play('roar'); audio.play('roar'); this.fx.shake(0.9);
         this.fx.ring(k.pos, { radius: 5, color: 0xff2020, life: 0.7 });
         this.ui.showBoss('SKELETON KING');
       }, 650);
@@ -461,7 +541,7 @@ export class Game {
     }, 2300);
   }
 
-  clearRoom(room) {
+  clearRoom(room: Room) {
     room.cleared = true; room.active = false;
     this.activeRoom = null;
     audio.setIntensity(0);
@@ -483,7 +563,7 @@ export class Game {
     if (reward) setTimeout(() => this.spawnChest(room, reward), 700);
   }
 
-  spawnChest(room, reward) {
+  spawnChest(room: Room, reward: Reward) {
     const pos = new THREE.Vector3(room.chest.x, 0, room.chest.z);
     // keep chest off solid tiles
     this.world.collide(pos, 0.5);
@@ -496,16 +576,16 @@ export class Game {
     const obj = clone('T_Chest');
     obj.position.set(pos.x, 6, pos.z);
     this.scene.add(obj);
-    const chest = { obj, pos, lid: obj.getObjectByName('T_Chest_Lid'), reward, state: 'drop', t: 0, room };
+    const chest: Chest = { obj, pos, lid: obj.getObjectByName('T_Chest_Lid')!, reward, state: 'drop', t: 0, room };
     this.chests.push(chest);
     this.dropIn(obj, pos, () => { chest.state = 'closed'; });
     // beacon light
     chest.light = this.lights.add({ x: pos.x, y: 1.4, z: pos.z, color: new THREE.Color(0xffd070), intensity: 3, range: 5, flicker: false });
   }
 
-  dropIn(obj, pos, done) {
+  dropIn(obj: THREE.Object3D, pos: THREE.Vector3, done: () => void) {
     const t0 = this.time;
-    const it = this.fx.timed(new THREE.Object3D(), 0.6, () => {
+    const it: TimedItem = this.fx.timed(new THREE.Object3D(), 0.6, () => {
       const k = Math.min(1, (this.time - t0) / 0.45);
       obj.position.y = 6 * (1 - k * k);
       if (k >= 1 && !it.landed) {
@@ -519,7 +599,7 @@ export class Game {
     });
   }
 
-  updateChests(dt) {
+  updateChests(dt: number) {
     const P = this.player;
     for (const c of this.chests) {
       c.t += dt;
@@ -543,12 +623,12 @@ export class Game {
     }
   }
 
-  giveReward(c) {
+  giveReward(c: Chest) {
     if (c.reward === 'weapon') this.spawnWeaponPickup(c.pos);
     else if (c.reward === 'buff') setTimeout(() => this.offerBuffs(), 350);
   }
 
-  spawnWeaponPickup(pos) {
+  spawnWeaponPickup(pos: XZ) {
     const id = this.weaponPool.shift() || 'fire';
     const w = WEAPONS[id];
     const holder = new THREE.Group();
@@ -563,13 +643,12 @@ export class Game {
     const ring = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6).rotateX(-Math.PI / 2), ringMat);
     ring.position.set(pos.x, 0.04, pos.z - 0.9);
     this.scene.add(ring);
-    const pk = { kind: 'weapon', id, obj: holder, ring, pos: new THREE.Vector3(pos.x, 0, pos.z - 0.9), age: 0, from: new THREE.Vector3(pos.x, 0.8, pos.z) };
-    this.pickups.push(pk);
+    this.pickups.push({ kind: 'weapon', id, obj: holder, ring, pos: new THREE.Vector3(pos.x, 0, pos.z - 0.9), age: 0, from: new THREE.Vector3(pos.x, 0.8, pos.z) });
     this.ui.weaponCard(id);
   }
 
   offerBuffs() {
-    const keys = shuffle(Object.keys(BUFFS)).slice(0, 3);
+    const keys = shuffle(Object.keys(BUFFS) as BuffId[]).slice(0, 3);
     this.paused = true;
     this.ui.buffChoice(keys, (k) => {
       this.paused = false;
@@ -577,7 +656,7 @@ export class Game {
     });
   }
 
-  applyBuff(k) {
+  applyBuff(k: BuffId) {
     const P = this.player;
     if (k === 'hp') { P.maxHp += 4; P.heal(4, true); }
     if (k === 'atkspd') P.atkMul *= 1.3;
@@ -591,16 +670,16 @@ export class Game {
     this.ui.updateHp(); this.ui.addBuff(k);
   }
 
-  onMimicReveal(e) { this.ui.toast('MIMIC!', 'Defeat it for double loot'); audio.setIntensity(1); }
+  onMimicReveal(_e: Enemy) { this.ui.toast('MIMIC!', 'Defeat it for double loot'); audio.setIntensity(1); }
 
-  onMimicDeath(e) {
+  onMimicDeath(e: Enemy) {
     audio.setIntensity(0);
     const pos = e.pos.clone();
     setTimeout(() => { this.spawnWeaponPickup(pos); }, 300);
     setTimeout(() => this.offerBuffs(), 900);
   }
 
-  onArcherAim(e) {
+  onArcherAim(_e: Enemy) {
     if (this.activeRoom?.index === 2 && !this.tutorial.dodgeHint) {
       this.tutorial.dodgeHint = true;
       this.fx.slowmo(1.1, 0.25);
@@ -608,34 +687,34 @@ export class Game {
     }
   }
 
-  onBossDeath(k) {
+  onBossDeath(k: Enemy) {
     this.ui.hideBoss();
     this.fx.slowmo(1.6, 0.2);
     audio.play('roar');
     // destroy remaining minions
     setTimeout(() => {
       for (const e of this.enemies) if (!e.dead) this.damageEnemy(e, 999, { knock: 5 });
-      this.projectiles.forEach((p) => { this.scene.remove(p.obj); if (p.tele) this.fx.kill(p.tele); });
+      this.projectiles.forEach((p) => { this.scene.remove(p.obj); if (p.kind === 'orb') this.fx.kill(p.tele); });
       this.projectiles.length = 0;
     }, 200);
     // big explosion sequence
     for (let i = 0; i < 6; i++) {
       setTimeout(() => {
-        const p = { x: k.pos.x + rnd(-1, 1), y: rnd(0.4, 1.5), z: k.pos.z + rnd(-1, 1) };
+        const p: XYZ = { x: k.pos.x + rnd(-1, 1), y: rnd(0.4, 1.5), z: k.pos.z + rnd(-1, 1) };
         this.fx.flash(p, { color: 0xff3a2a, size: 3, life: 0.25 });
         this.fx.burst(p, { count: 20, color: i % 2 ? 0xff3a2a : 0xffd070, speed: 5, life: 0.7, size: 0.3, gravity: 3, up: 3 });
         audio.play('boom'); this.fx.shake(0.6);
       }, i * 160);
     }
     this.dropCoins(k.pos, 20);
-    this.activeRoom && (this.activeRoom.cleared = true);
+    if (this.activeRoom) this.activeRoom.cleared = true;
     setTimeout(() => {
       audio.play('clear');
       this.ui.toast('VICTORY!', 'The exit is open');
       this.world.openExit();
       this.exitAnim = 0;
       audio.play('gateOpen');
-      this.camFocus = { pos: new THREE.Vector3(0, 0, this.world.rooms[6].zTop + 1), t: 1.6 };
+      this.camFocus = { pos: new THREE.Vector3(0, 0, this.world.bossRoom.zTop + 1), t: 1.6 };
       this.player.heal(99);
     }, 1400);
   }
@@ -661,7 +740,7 @@ export class Game {
   }
 
   // ================= frame =================
-  update(realDt) {
+  update(realDt: number) {
     if (this.paused) { this.fx.update(0, realDt, this.W, this.H); return; }
     const dt = this.fx.step(realDt);
     this.time += dt;
@@ -681,7 +760,7 @@ export class Game {
     this.updateCamera(realDt);
   }
 
-  updateGates(dt) {
+  updateGates(dt: number) {
     for (const rm of this.world.rooms) {
       if (!rm) continue;
       for (const g of rm.gates) {
@@ -697,16 +776,16 @@ export class Game {
       }
     }
     if (this.world.exitOpen) {
-      this.exitAnim = Math.min(1, (this.exitAnim || 0) + dt * 0.8);
+      this.exitAnim = Math.min(1, this.exitAnim + dt * 0.8);
       const k = 1 - Math.pow(1 - this.exitAnim, 3);
       const [L, R] = this.world.exitLeaves;
       L.rotation.y = -k * 1.9; R.rotation.y = k * 1.9;
       this.world.exitLight.intensity = 8 * k;
-      if (Math.random() < dt * 30) this.fx.burst({ x: rnd(-0.8, 0.8), y: rnd(0.2, 2), z: this.world.rooms[6].zTop + 0.6 }, { count: 1, color: 0x6ab0ff, speed: 0.6, life: 1, size: 0.25, gravity: -1, up: 0.5 });
+      if (Math.random() < dt * 30) this.fx.burst({ x: rnd(-0.8, 0.8), y: rnd(0.2, 2), z: this.world.bossRoom.zTop + 0.6 }, { count: 1, color: 0x6ab0ff, speed: 0.6, life: 1, size: 0.25, gravity: -1, up: 0.5 });
     }
   }
 
-  updatePickups(dt) {
+  updatePickups(dt: number) {
     const P = this.player;
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const p = this.pickups[i];
@@ -730,7 +809,7 @@ export class Game {
           P.coins++; audio.play('coin'); this.ui.updateCoins();
           this.fx.burst({ x: P.pos.x, y: 0.6, z: P.pos.z }, { count: 3, color: 0xffd040, speed: 1.5, life: 0.3, size: 0.15, gravity: 0, up: 1 });
         }
-      } else if (p.kind === 'weapon') {
+      } else {
         const k = Math.min(1, p.age / 0.6);
         p.obj.position.lerpVectors(p.from, _v.set(p.pos.x, 0.9, p.pos.z), 1 - Math.pow(1 - k, 3));
         p.obj.position.y = 0.9 + Math.sin(k * Math.PI) * 1.2 + Math.sin(this.time * 3) * 0.1;
@@ -740,18 +819,19 @@ export class Game {
           this.scene.remove(p.obj); this.scene.remove(p.ring); this.pickups.splice(i, 1);
           P.addWeapon(p.id);
           audio.play('pickup');
-          this.fx.flash({ x: P.pos.x, y: 0.8, z: P.pos.z }, { color: WEAPONS[p.id].color, size: 3, life: 0.3 });
-          this.fx.burst({ x: P.pos.x, y: 0.5, z: P.pos.z }, { count: 30, color: WEAPONS[p.id].color, speed: 3, life: 0.7, size: 0.22, gravity: -2, up: 2 });
-          this.fx.ring(P.pos, { radius: 1.8, color: WEAPONS[p.id].color, life: 0.4 });
+          const w = WEAPONS[p.id];
+          this.fx.flash({ x: P.pos.x, y: 0.8, z: P.pos.z }, { color: w.color, size: 3, life: 0.3 });
+          this.fx.burst({ x: P.pos.x, y: 0.5, z: P.pos.z }, { count: 30, color: w.color, speed: 3, life: 0.7, size: 0.22, gravity: -2, up: 2 });
+          this.fx.ring(P.pos, { radius: 1.8, color: w.color, life: 0.4 });
           this.ui.hideWeaponCard();
-          this.ui.toast(WEAPONS[p.id].name.toUpperCase(), WEAPONS[p.id].desc);
+          this.ui.toast(w.name.toUpperCase(), w.desc);
           if (P.weapons.length === 2 && !this.swapHinted) { this.swapHinted = true; setTimeout(() => this.ui.hint('Tap the weapon button to swap', { time: 2.6, swap: true }), 1800); }
         }
       }
     }
   }
 
-  updateDebris(dt) {
+  updateDebris(dt: number) {
     for (let i = this.debris.length - 1; i >= 0; i--) {
       const d = this.debris[i];
       d.life -= dt;
@@ -771,7 +851,7 @@ export class Game {
     }
   }
 
-  updateLights(dt) {
+  updateLights(dt: number) {
     this.lights.update(dt, this.time, this.camTarget);
     const ts = this.world.torches;
     for (const t of ts) {
@@ -782,7 +862,7 @@ export class Game {
     }
   }
 
-  updateCamera(dt) {
+  updateCamera(dt: number) {
     const P = this.player;
     let target = _v.copy(P.pos);
     if (this.camFocus) {
@@ -810,8 +890,8 @@ export class Game {
   }
 
   /** Keep everything the camera sees inside the room (walls included), so nothing behind the room shows. */
-  clampToRoom(want, target) {
-    const W = this.world, v = this.view;
+  clampToRoom(want: THREE.Vector3, target: THREE.Vector3) {
+    const W = this.world, v = this.view!;
     const r = W.row(target.z);
     let top = -Infinity, bottom = Infinity;
     const room = W.roomAtRow(r);
@@ -830,7 +910,7 @@ export class Game {
     want.x = Math.max(-maxX, Math.min(maxX, want.x));
   }
 
-  resize(w, h) {
+  resize(w: number, h: number) {
     this.W = w; this.H = h;
     const aspect = w / h;
     const portrait = aspect < 1;
@@ -844,7 +924,7 @@ export class Game {
     this.camera.lookAt(0, 0, 0);
     this.camera.updateMatrixWorld();
     const rc = new THREE.Raycaster(), ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
-    const at = (x, y) => { rc.setFromCamera(new THREE.Vector2(x, y), this.camera); return rc.ray.intersectPlane(ground, hit) ? hit.clone() : new THREE.Vector3(0, 0, -50); };
+    const at = (x: number, y: number) => { rc.setFromCamera(new THREE.Vector2(x, y), this.camera); return rc.ray.intersectPlane(ground, hit) ? hit.clone() : new THREE.Vector3(0, 0, -50); };
     const tl = at(-1, 1), tr = at(1, 1), bc = at(0, -1), ml = at(-1, 0), mr = at(1, 0);
     const top1 = Math.min(tl.z, tr.z), bottom1 = bc.z, halfTop1 = Math.max(Math.abs(tl.x), Math.abs(tr.x));
     const across1 = mr.x - ml.x;

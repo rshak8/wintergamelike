@@ -1,16 +1,33 @@
 import * as THREE from 'three';
 
 const ease = {
-  out: (t) => 1 - Math.pow(1 - t, 3),
-  in: (t) => t * t * t,
-  inOut: (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2),
-  back: (t) => { const c = 1.9; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); },
+  out: (t: number) => 1 - Math.pow(1 - t, 3),
+  in: (t: number) => t * t * t,
+  inOut: (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2),
+  back: (t: number) => { const c = 1.9; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); },
 };
-const lerp = (a, b, t) => a + (b - a) * t;
-const seg = (t, a, b) => Math.min(1, Math.max(0, (t - a) / (b - a)));
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const seg = (t: number, a: number, b: number) => Math.min(1, Math.max(0, (t - a) / (b - a)));
 
-// Action poses. t in 0..1. Return partial pose: aR/aL = arm {x,z}, bx/by = body lean/twist, dy = body height,
-// p = weapon pitch (0 = along arm), sq = squash, lean = forward root offset (entity applies)
+interface ArmPose { x: number; z: number }
+
+/**
+ * Partial pose: aR/aL = arm {x,z}, bx/by = body lean/twist, dy = body height, hx = head pitch,
+ * p = weapon pitch (0 = along arm), sq = squash, lean = forward root offset (entity applies)
+ */
+export interface Pose {
+  aR?: ArmPose; aL?: ArmPose;
+  bx?: number; by?: number; dy?: number; hx?: number;
+  p?: number; sq?: number; lean?: number;
+}
+
+/** dur > 5 means a looping hold pose (stays until stop() or another play()). */
+export interface Action {
+  dur: number;
+  pose(t: number, alt: boolean, time: number): Pose;
+}
+
+// Action poses. t in 0..1.
 export const ACTIONS = {
   stab: {
     dur: 0.3, pose(t) {
@@ -62,7 +79,7 @@ export const ACTIONS = {
     },
   },
   // enemy moves
-  windup: { dur: 9, pose(t) { return { aR: { x: 0.9, z: 0.5 }, by: 0.6, bx: -0.15, p: -1.2, dy: -0.03 }; } },
+  windup: { dur: 9, pose() { return { aR: { x: 0.9, z: 0.5 }, by: 0.6, bx: -0.15, p: -1.2, dy: -0.03 }; } },
   thrustE: {
     dur: 0.35, pose(t) {
       const s = seg(t, 0, 0.25), r = seg(t, 0.5, 1);
@@ -75,7 +92,7 @@ export const ACTIONS = {
       return { aR: { x: lerp(-1.3, -0.5, r), z: lerp(1.1, 0.2, s) }, by: lerp(lerp(1.2, -1.3, ease.out(s)), 0, r), bx: 0.15, p: lerp(-0.2, -1.6, r), dy: -0.04 * s * (1 - r) };
     },
   },
-  aim: { dur: 9, pose(t) { return { aR: { x: -1.5, z: 0 }, aL: { x: -1.2, z: -0.5 }, by: 0.35, bx: -0.05, p: 0 }; } },
+  aim: { dur: 9, pose() { return { aR: { x: -1.5, z: 0 }, aL: { x: -1.2, z: -0.5 }, by: 0.35, bx: -0.05, p: 0 }; } },
   channel: { dur: 9, pose(t, a, time) { const b = Math.sin(time * 10) * 0.08; return { aR: { x: -2.6 + b, z: 0.3 }, aL: { x: -2.6 - b, z: -0.3 }, bx: -0.2, dy: 0.04, p: 0 }; } },
   castE: {
     dur: 9, pose(t, a, time) { const b = Math.sin(time * 14) * 0.06; return { aR: { x: -1.9 + b, z: 0.2 }, aL: { x: -0.6, z: -0.5 }, bx: -0.15, p: 0 }; },
@@ -89,53 +106,71 @@ export const ACTIONS = {
   },
   spin: { dur: 9, pose(t, a, time) { return { aR: { x: -1.5, z: 1.3 }, aL: { x: -1.5, z: -1.3 }, by: time * 22, p: 0 }; } },
   roar: { dur: 1.0, pose(t) { const k = Math.sin(seg(t, 0, 1) * Math.PI); return { aR: { x: -0.6 * k, z: 1.2 * k }, aL: { x: -0.6 * k, z: -1.2 * k }, bx: -0.4 * k, hx: -0.5 * k }; } },
-};
+} satisfies Record<string, Action>;
+
+export type ActionName = keyof typeof ACTIONS;
+
+/** How a weapon sits in the hand: sword-like, bow, or floating orb. */
+export type GripBasis = 'blade' | 'bow' | 'orb';
+
+interface RestPose { pos: THREE.Vector3; rot: THREE.Euler }
 
 export class Rig {
-  constructor(root, prefix) {
+  root: THREE.Object3D;
+  body?: THREE.Object3D; head?: THREE.Object3D;
+  armL?: THREE.Object3D; armR?: THREE.Object3D;
+  legL?: THREE.Object3D; legR?: THREE.Object3D;
+  cape?: THREE.Object3D; handR?: THREE.Object3D; handL?: THREE.Object3D;
+  rest = new Map<THREE.Object3D, RestPose>();
+  phase = 0; move = 0; time = Math.random() * 10;
+  action: Action | null = null; actionName: ActionName | null = null;
+  at = 0; alt = false;
+  squash = 0; squashV = 0;
+  pitch = -1.7; // weapon idle pitch
+  idlePitch = -1.7;
+  armRestR = -0.35; armRestL = -0.1;
+  lean = 0;
+  baseScale = 1;
+  holder: THREE.Group | null = null;
+  grip: THREE.Group | null = null;
+  weapon: THREE.Object3D | null = null;
+  basis: GripBasis = 'blade';
+
+  constructor(root: THREE.Object3D, prefix: string) {
     this.root = root;
-    const get = (n) => root.getObjectByName(prefix + '_' + n);
+    const get = (n: string) => root.getObjectByName(prefix + '_' + n);
     this.body = get('Body'); this.head = get('Head');
     this.armL = get('ArmL'); this.armR = get('ArmR');
     this.legL = get('LegL'); this.legR = get('LegR');
     this.cape = get('Cape'); this.handR = get('HandR'); this.handL = get('HandL');
-    this.rest = new Map();
     for (const p of [this.body, this.head, this.armL, this.armR, this.legL, this.legR, this.cape]) {
       if (p) this.rest.set(p, { pos: p.position.clone(), rot: p.rotation.clone() });
     }
-    this.phase = 0; this.move = 0; this.time = Math.random() * 10;
-    this.action = null; this.at = 0; this.alt = false;
-    this.squash = 0; this.squashV = 0;
-    this.pitch = -1.7; // weapon idle pitch
-    this.idlePitch = -1.7;
-    this.armRestR = -0.35; this.armRestL = -0.1;
-    this.lean = 0;
-    this.holder = null;
   }
 
-  play(name, alt = false) {
+  play(name: ActionName, alt = false) {
     this.action = ACTIONS[name]; this.actionName = name; this.at = 0; this.alt = alt;
   }
-  hold(name) { if (this.actionName !== name) this.play(name); }
+  hold(name: ActionName) { if (this.actionName !== name) this.play(name); }
   stop() { this.action = null; this.actionName = null; }
-  punch(amount) { this.squashV += amount; }
+  punch(amount: number) { this.squashV += amount; }
 
   /**
-   * Put a weapon in the right fist. basis: 'blade' | 'bow' | 'orb'.
+   * Put a weapon in the right fist.
    * Weapons are modelled with the grip centre at their origin and the handle along +Y (three.js).
    * The hand socket sits in the middle of the fist, whose hole runs forward (+Z) when the arm hangs down.
    * The holder is the wrist: it lives in the arm's frame and pitches the weapon around the arm's X axis.
    */
-  attach(obj, basis = 'blade', hand = 'R') {
+  attach(obj: THREE.Object3D, basis: GripBasis = 'blade', hand: 'R' | 'L' = 'R') {
     const h = hand === 'R' ? this.handR : this.handL;
-    if (!h) return;
+    if (!h || !h.parent) return;
     if (this.holder) this.holder.parent?.remove(this.holder);
     const holder = new THREE.Group();
     holder.position.copy(h.position);
     h.parent.add(holder);
     const grip = new THREE.Group();
     holder.add(grip);
-    const V = (x, y, z) => new THREE.Vector3(x, y, z);
+    const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
     if (basis === 'blade') {
       // handle -> forward through the fist, blade width -> up (edge leads when swinging)
       grip.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(V(0, 1, 0), V(0, 0, 1), V(1, 0, 0)));
@@ -149,29 +184,28 @@ export class Rig {
     this.holder = holder; this.grip = grip; this.weapon = obj; this.basis = basis;
   }
 
-  update(dt, speed01) {
+  update(dt: number, speed01: number) {
     this.time += dt;
     this.move += (Math.min(1, speed01) - this.move) * Math.min(1, dt * 12);
     this.phase += dt * (6 + 8 * this.move) * (this.move > 0.05 ? 1 : 0);
     const mv = this.move;
     const s = Math.sin(this.phase), c = Math.cos(this.phase);
-    let pose = null;
+    let pose: Pose = {};
     if (this.action) {
       this.at += dt;
       const t = Math.min(1, this.at / this.action.dur);
       pose = this.action.pose(t, this.alt, this.time);
       if (t >= 1 && this.action.dur < 5) { this.action = null; this.actionName = null; }
     }
-    pose = pose || {};
     const R = this.rest;
     // legs
-    if (this.legL) {
-      this.legL.rotation.x = R.get(this.legL).rot.x + s * 0.75 * mv;
-      this.legR.rotation.x = R.get(this.legR).rot.x - s * 0.75 * mv;
+    if (this.legL && this.legR) {
+      this.legL.rotation.x = R.get(this.legL)!.rot.x + s * 0.75 * mv;
+      this.legR.rotation.x = R.get(this.legR)!.rot.x - s * 0.75 * mv;
     }
     // body
     if (this.body) {
-      const rb = R.get(this.body);
+      const rb = R.get(this.body)!;
       const bob = Math.abs(c) * 0.045 * mv + Math.sin(this.time * 2.2) * 0.008 * (1 - mv);
       this.body.position.y = rb.pos.y + bob + (pose.dy || 0);
       this.body.rotation.x = rb.rot.x + 0.14 * mv + (pose.bx || 0);
@@ -179,7 +213,7 @@ export class Rig {
       this.body.rotation.z = rb.rot.z + c * 0.03 * mv;
     }
     if (this.head) {
-      const rh = R.get(this.head);
+      const rh = R.get(this.head)!;
       this.head.rotation.x = rh.rot.x - 0.08 * mv + Math.sin(this.time * 2.2 + 1) * 0.02 + (pose.hx || 0);
       this.head.rotation.y = rh.rot.y - (pose.by || 0) * 0.35;
     }
@@ -187,14 +221,14 @@ export class Rig {
     const swing = s * 0.6 * mv;
     if (this.armR) {
       const ar = pose.aR || { x: this.armRestR - swing * 0.6, z: 0.08 };
-      this.armR.rotation.x = ar.x; this.armR.rotation.z = R.get(this.armR).rot.z + ar.z;
+      this.armR.rotation.x = ar.x; this.armR.rotation.z = R.get(this.armR)!.rot.z + ar.z;
     }
     if (this.armL) {
       const al = pose.aL || { x: this.armRestL + swing, z: -0.08 };
-      this.armL.rotation.x = al.x; this.armL.rotation.z = R.get(this.armL).rot.z + al.z;
+      this.armL.rotation.x = al.x; this.armL.rotation.z = R.get(this.armL)!.rot.z + al.z;
     }
     if (this.cape) {
-      const rc = R.get(this.cape);
+      const rc = R.get(this.cape)!;
       this.cape.rotation.x = rc.rot.x + 0.15 + mv * 0.55 + Math.sin(this.time * 9) * 0.06 * (0.3 + mv);
     }
     // weapon pitch

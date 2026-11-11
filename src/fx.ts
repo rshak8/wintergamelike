@@ -1,16 +1,25 @@
 import * as THREE from 'three';
 
+/** A point in the world; y is optional (each effect picks its own default height). */
+export interface XYZ { x: number; y?: number; z: number }
+/** A direction on the ground plane. */
+export interface XZ { x: number; z: number }
+
 // ---------- canvas textures ----------
-function canvasTex(size, draw) {
+function canvasTex(size: number, draw: (g: CanvasRenderingContext2D, s: number) => void) {
   const c = document.createElement('canvas');
   c.width = c.height = size;
-  const g = c.getContext('2d');
+  const g = c.getContext('2d')!;
   draw(g, size);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
-export const TEX = {};
+
+type TexName = 'dot' | 'glow' | 'shadow' | 'ring' | 'scorch' | 'holy' | 'rune' | 'spawn' | 'crescent';
+/** Filled when FX is created (before the world and characters are built). */
+export const TEX = {} as Record<TexName, THREE.CanvasTexture>;
+
 function makeTextures() {
   TEX.dot = canvasTex(64, (g, s) => {
     const gr = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
@@ -98,8 +107,18 @@ uniform sampler2D uTex; varying vec4 vColor;
 void main(){ vec4 t = texture2D(uTex, gl_PointCoord); gl_FragColor = vec4(vColor.rgb, vColor.a * t.a); if(gl_FragColor.a<0.01) discard; }`;
 
 class Particles {
-  constructor(scene, max, additive) {
-    this.max = max; this.n = 0;
+  max: number; n = 0;
+  pos: Float32Array; vel: Float32Array;
+  col: Float32Array; size: Float32Array;
+  life: Float32Array; maxLife: Float32Array;
+  s0: Float32Array; grav: Float32Array; drag: Float32Array;
+  base: Float32Array;
+  pa: THREE.BufferAttribute; ca: THREE.BufferAttribute; sa: THREE.BufferAttribute;
+  mat: THREE.ShaderMaterial;
+  points: THREE.Points;
+
+  constructor(scene: THREE.Scene, max: number, additive: boolean) {
+    this.max = max;
     this.pos = new Float32Array(max * 3); this.vel = new Float32Array(max * 3);
     this.col = new Float32Array(max * 4); this.size = new Float32Array(max);
     this.life = new Float32Array(max); this.maxLife = new Float32Array(max);
@@ -120,14 +139,14 @@ class Particles {
     this.points.renderOrder = additive ? 20 : 15;
     scene.add(this.points);
   }
-  spawn(x, y, z, vx, vy, vz, color, size, life, grav, drag) {
-    let i = this.n < this.max ? this.n++ : Math.floor(Math.random() * this.max);
+  spawn(x: number, y: number, z: number, vx: number, vy: number, vz: number, color: THREE.Color, size: number, life: number, grav: number, drag: number) {
+    const i = this.n < this.max ? this.n++ : Math.floor(Math.random() * this.max);
     this.pos[i * 3] = x; this.pos[i * 3 + 1] = y; this.pos[i * 3 + 2] = z;
     this.vel[i * 3] = vx; this.vel[i * 3 + 1] = vy; this.vel[i * 3 + 2] = vz;
     this.base[i * 3] = color.r; this.base[i * 3 + 1] = color.g; this.base[i * 3 + 2] = color.b;
     this.s0[i] = size; this.life[i] = life; this.maxLife[i] = life; this.grav[i] = grav; this.drag[i] = drag;
   }
-  update(dt) {
+  update(dt: number) {
     let i = 0;
     while (i < this.n) {
       this.life[i] -= dt;
@@ -146,7 +165,7 @@ class Particles {
     this.points.geometry.setDrawRange(0, this.n);
     this.pa.needsUpdate = true; this.ca.needsUpdate = true; this.sa.needsUpdate = true;
   }
-  copy(from, to) {
+  copy(from: number, to: number) {
     for (let c = 0; c < 3; c++) {
       this.pos[to * 3 + c] = this.pos[from * 3 + c]; this.vel[to * 3 + c] = this.vel[from * 3 + c]; this.base[to * 3 + c] = this.base[from * 3 + c];
     }
@@ -193,9 +212,9 @@ void main(){
   gl_FragColor = vec4(c * a, a);
 }`;
 
-function arcGeometry(inner, outer, angle, seg = 20) {
+function arcGeometry(inner: number, outer: number, angle: number, seg = 20) {
   const g = new THREE.BufferGeometry();
-  const pos = [], uv = [], idx = [];
+  const pos: number[] = [], uv: number[] = [], idx: number[] = [];
   for (let i = 0; i <= seg; i++) {
     const t = i / seg;
     const a = -angle / 2 + angle * t;
@@ -210,31 +229,71 @@ function arcGeometry(inner, outer, angle, seg = 20) {
   return g;
 }
 
+/** An effect object that lives for a while; update runs every frame until life runs out. */
+export interface TimedItem {
+  obj: THREE.Object3D;
+  life: number;
+  max: number;
+  update?: (dt: number, it: TimedItem) => void;
+  onEnd?: () => void;
+  dead: boolean;
+  mesh?: THREE.Mesh;  // telegraphs: the floor mesh (enemies re-aim it)
+  landed?: boolean;   // dropIn: the object has hit the floor
+}
+
+export interface BurstOpts {
+  count?: number; color?: THREE.ColorRepresentation; speed?: number; life?: number; size?: number;
+  gravity?: number; up?: number; spread?: number; additive?: boolean; drag?: number;
+  dir?: XZ | null; jitter?: number; colorVar?: number;
+}
+
+export interface DecalOpts {
+  tex?: THREE.Texture; size?: number; color?: THREE.ColorRepresentation; life?: number; additive?: boolean;
+  opacity?: number; rot?: number; grow?: number; fadeIn?: number; y?: number;
+}
+
+export interface TelegraphOpts {
+  shape?: 'circle' | 'sector' | 'rect';
+  pos: XZ; dir?: XZ;
+  radius?: number; angle?: number; length?: number; width?: number;
+  time?: number; color?: THREE.ColorRepresentation;
+  follow?: ((mesh: THREE.Mesh) => void) | null;
+}
+
+export interface TextOpts { color?: string; size?: number; crit?: boolean; life?: number; rise?: number }
+
+interface FloatingText { el: HTMLDivElement; x: number; y: number; z: number; life: number; max: number; rise: number; vx: number }
+
 export class FX {
-  constructor(scene, camera) {
+  scene: THREE.Scene; camera: THREE.Camera;
+  add: Particles; norm: Particles;
+  items: TimedItem[] = [];
+  shakeT = 0; shakeAmt = 0;
+  hitstopT = 0;
+  timeScale = 1; slowT = 0; slowScale = 1;
+  layer: HTMLElement;
+  texts: FloatingText[] = [];
+  planeGeo: THREE.BufferGeometry;
+  _c = new THREE.Color();
+  _v = new THREE.Vector3();
+
+  constructor(scene: THREE.Scene, camera: THREE.Camera) {
     makeTextures();
     this.scene = scene; this.camera = camera;
     this.add = new Particles(scene, 2500, true);
     this.norm = new Particles(scene, 1200, false);
-    this.items = []; // timed objects {obj, life, max, update(t)}
-    this.shakeT = 0; this.shakeAmt = 0;
-    this.hitstopT = 0;
-    this.timeScale = 1; this.slowT = 0;
-    this.layer = document.getElementById('fxLayer');
-    this.texts = [];
+    this.layer = document.getElementById('fxLayer')!;
     this.planeGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
-    this._c = new THREE.Color();
-    this._v = new THREE.Vector3();
   }
 
-  setScale(h, fov) {
+  setScale(h: number, fov: number) {
     const s = h / (2 * Math.tan(THREE.MathUtils.degToRad(fov) / 2));
     this.add.mat.uniforms.uScale.value = s;
     this.norm.mat.uniforms.uScale.value = s;
   }
 
   // ---- particles ----
-  burst(p, o = {}) {
+  burst(p: XYZ, o: BurstOpts = {}) {
     const {
       count = 10, color = 0xffffff, speed = 3, life = 0.5, size = 0.25, gravity = 6, up = 2, spread = 1,
       additive = true, drag = 2, dir = null, jitter = 0.1, colorVar = 0,
@@ -258,18 +317,18 @@ export class FX {
     }
   }
 
-  spark(p, color, n = 8, speed = 6) { this.burst(p, { count: n, color, speed, life: 0.3, size: 0.14, gravity: 10, up: 3, drag: 3 }); }
+  spark(p: XYZ, color: THREE.ColorRepresentation, n = 8, speed = 6) { this.burst(p, { count: n, color, speed, life: 0.3, size: 0.14, gravity: 10, up: 3, drag: 3 }); }
 
   // ---- generic timed items ----
-  timed(obj, life, update, onEnd) {
+  timed(obj: THREE.Object3D, life: number, update?: TimedItem['update'], onEnd?: () => void): TimedItem {
     this.scene.add(obj);
-    const it = { obj, life, max: life, update, onEnd, dead: false };
+    const it: TimedItem = { obj, life, max: life, update, onEnd, dead: false };
     this.items.push(it);
     return it;
   }
-  kill(it) { if (it) it.life = 0; }
+  kill(it: TimedItem | null | undefined) { if (it) it.life = 0; }
 
-  decal(p, { tex = TEX.glow, size = 1, color = 0xffffff, life = 1, additive = true, opacity = 1, rot = 0, grow = 0, fadeIn = 0, y = 0.02 } = {}) {
+  decal(p: XZ, { tex = TEX.glow, size = 1, color = 0xffffff, life = 1, additive = true, opacity = 1, rot = 0, grow = 0, fadeIn = 0, y = 0.02 }: DecalOpts = {}) {
     const m = new THREE.MeshBasicMaterial({
       map: tex, color, transparent: true, depthWrite: false, opacity,
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
@@ -287,7 +346,7 @@ export class FX {
     }, () => m.dispose());
   }
 
-  ring(p, { radius = 2, color = 0xffffff, life = 0.4, y = 0.05, width = 1 } = {}) {
+  ring(p: XZ, { radius = 2, color = 0xffffff as THREE.ColorRepresentation, life = 0.4, y = 0.05, width = 1 } = {}) {
     const m = new THREE.MeshBasicMaterial({ map: TEX.ring, color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
     const mesh = new THREE.Mesh(this.planeGeo, m);
     mesh.position.set(p.x, y, p.z);
@@ -301,7 +360,7 @@ export class FX {
   }
 
   /** Ground danger telegraph. shape: circle|sector|rect. Returns item; progress fills over `time`. */
-  telegraph({ shape = 'circle', pos, dir = { x: 0, z: 1 }, radius = 1, angle = 1, length = 3, width = 1, time = 0.6, color = 0xff2a2a, follow = null }) {
+  telegraph({ shape = 'circle', pos, dir = { x: 0, z: 1 }, radius = 1, angle = 1, length = 3, width = 1, time = 0.6, color = 0xff2a2a, follow = null }: TelegraphOpts) {
     const mat = new THREE.ShaderMaterial({
       vertexShader: TELE_VERT, fragmentShader: TELE_FRAG, transparent: true, depthWrite: false,
       uniforms: { uColor: { value: new THREE.Color(color) }, uProg: { value: 0 }, uMode: { value: shape === 'circle' ? 0 : shape === 'sector' ? 1 : 2 }, uAngle: { value: angle / 2 }, uAlpha: { value: 1 } },
@@ -326,7 +385,7 @@ export class FX {
   }
 
   /** Melee slash arc around p, facing dir. */
-  arc(p, dir, { radius = 1.8, inner = 0.4, angle = 2.2, color = 0xffffff, life = 0.22, y = 0.55, flip = false, tilt = 0 } = {}) {
+  arc(p: XZ, dir: XZ, { radius = 1.8, inner = 0.4, angle = 2.2, color = 0xffffff as THREE.ColorRepresentation, life = 0.22, y = 0.55, flip = false, tilt = 0 } = {}) {
     const geo = arcGeometry(inner, radius, angle);
     const mat = new THREE.ShaderMaterial({
       vertexShader: TELE_VERT, fragmentShader: ARC_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
@@ -346,7 +405,7 @@ export class FX {
   }
 
   /** Thrust streak (stab). */
-  thrust(p, dir, { length = 1.8, width = 0.5, color = 0xffffff, life = 0.16, y = 0.55 } = {}) {
+  thrust(p: XZ, dir: XZ, { length = 1.8, width = 0.5, color = 0xffffff as THREE.ColorRepresentation, life = 0.16, y = 0.55 } = {}) {
     const shape = new THREE.Shape();
     shape.moveTo(-width / 2, 0); shape.lineTo(0, length); shape.lineTo(width / 2, 0); shape.lineTo(0, -0.15);
     const geo = new THREE.ShapeGeometry(shape).rotateX(Math.PI / 2);
@@ -362,9 +421,9 @@ export class FX {
     }, () => { geo.dispose(); mat.dispose(); });
   }
 
-  /** Jagged lightning ribbon through points (array of Vector3). */
-  bolt(points, { color = 0xa57bff, life = 0.22, width = 0.22, jag = 0.35 } = {}) {
-    const pts = [];
+  /** Jagged lightning ribbon through points. */
+  bolt(points: THREE.Vector3[], { color = 0xa57bff as THREE.ColorRepresentation, life = 0.22, width = 0.22, jag = 0.35 } = {}) {
+    const pts: THREE.Vector3[] = [];
     for (let i = 0; i < points.length - 1; i++) {
       const a = points[i], b = points[i + 1];
       const segs = Math.max(3, Math.floor(a.distanceTo(b) / 0.35));
@@ -376,8 +435,8 @@ export class FX {
       }
     }
     pts.push(points[points.length - 1].clone());
-    const build = (w, col, op) => {
-      const pos = [], idx = [];
+    const build = (w: number, col: THREE.ColorRepresentation, op: number) => {
+      const pos: number[] = [], idx: number[] = [];
       for (let i = 0; i < pts.length; i++) {
         const p = pts[i], n = pts[Math.min(pts.length - 1, i + 1)], pr = pts[Math.max(0, i - 1)];
         const d = n.clone().sub(pr); d.y = 0; d.normalize();
@@ -402,7 +461,7 @@ export class FX {
   }
 
   /** Billboard glow sprite (for flashes, muzzle, light pools) */
-  flash(p, { color = 0xffffff, size = 1.5, life = 0.15, y = 0.6 } = {}) {
+  flash(p: XYZ, { color = 0xffffff as THREE.ColorRepresentation, size = 1.5, life = 0.15, y = 0.6 } = {}) {
     const m = new THREE.SpriteMaterial({ map: TEX.glow, color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
     const s = new THREE.Sprite(m);
     s.position.set(p.x, p.y ?? y, p.z); s.scale.setScalar(size); s.renderOrder = 25;
@@ -412,7 +471,7 @@ export class FX {
   }
 
   // ---- damage numbers (DOM) ----
-  text(p, str, { color = '#fff', size = 22, crit = false, life = 0.75, rise = 1.2 } = {}) {
+  text(p: XYZ, str: string, { color = '#fff', size = 22, crit = false, life = 0.75, rise = 1.2 }: TextOpts = {}) {
     const el = document.createElement('div');
     el.className = 'dmg' + (crit ? ' crit' : '');
     el.textContent = str;
@@ -422,18 +481,18 @@ export class FX {
     this.texts.push({ el, x: p.x + (Math.random() - 0.5) * 0.3, y: (p.y ?? 1.2), z: p.z, life, max: life, rise, vx: (Math.random() - 0.5) * 0.8 });
   }
 
-  shake(a) { this.shakeAmt = Math.min(1, Math.max(this.shakeAmt, a)); }
-  hitstop(ms) { this.hitstopT = Math.max(this.hitstopT, ms / 1000); }
-  slowmo(t, scale = 0.25) { this.slowT = t; this.slowScale = scale; }
+  shake(a: number) { this.shakeAmt = Math.min(1, Math.max(this.shakeAmt, a)); }
+  hitstop(ms: number) { this.hitstopT = Math.max(this.hitstopT, ms / 1000); }
+  slowmo(t: number, scale = 0.25) { this.slowT = t; this.slowScale = scale; }
 
   /** returns scaled dt for the game simulation */
-  step(realDt) {
+  step(realDt: number) {
     if (this.hitstopT > 0) { this.hitstopT -= realDt; return 0; }
     if (this.slowT > 0) { this.slowT -= realDt; return realDt * this.slowScale; }
     return realDt;
   }
 
-  update(dt, realDt, w, h) {
+  update(dt: number, realDt: number, w: number, h: number) {
     this.add.update(dt); this.norm.update(dt);
     for (let i = this.items.length - 1; i >= 0; i--) {
       const it = this.items[i];
@@ -454,12 +513,12 @@ export class FX {
       const sx = (v.x * 0.5 + 0.5) * w, sy = (-v.y * 0.5 + 0.5) * h;
       const pop = k < 0.15 ? 0.6 + k / 0.15 * 0.7 : 1.3 - Math.min(0.3, (k - 0.15) * 1.5);
       t.el.style.transform = `translate(${sx}px, ${sy}px) translate(-50%,-50%) scale(${pop})`;
-      t.el.style.opacity = t.life < 0.25 ? t.life / 0.25 : 1;
+      t.el.style.opacity = String(t.life < 0.25 ? t.life / 0.25 : 1);
     }
     this.shakeAmt = Math.max(0, this.shakeAmt - realDt * 2.2);
   }
 
-  shakeOffset(t) {
+  shakeOffset(t: number) {
     const a = this.shakeAmt * this.shakeAmt * 0.35;
     return { x: (Math.sin(t * 91) + Math.sin(t * 57)) * 0.5 * a, z: (Math.cos(t * 83) + Math.sin(t * 41)) * 0.5 * a };
   }

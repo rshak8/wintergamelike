@@ -1,21 +1,76 @@
 import * as THREE from 'three';
-import { cloneCharacter, clone } from './assets.js';
-import { Rig } from './anim.js';
-import { ENEMIES, CHAR_SCALE } from './config.js';
-import { TEX } from './fx.js';
-import { audio } from './audio.js';
+import { cloneCharacter, clone, type CharFx } from './assets';
+import { Rig, type GripBasis } from './anim';
+import { ENEMIES, CHAR_SCALE, type EnemyDef, type EnemyType } from './config';
+import { TEX, type TimedItem, type XZ } from './fx';
+import { audio } from './audio';
+import type { Game, HitInfo } from './game';
+import type { Room } from './world';
 
 const _v = new THREE.Vector3();
 const _a = new THREE.Vector3();
 const TAU = Math.PI * 2;
-const rnd = (a, b) => a + Math.random() * (b - a);
-const angTo = (a, b) => Math.atan2(b.x - a.x, b.z - a.z);
-const dirOf = (ang) => new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang));
+const rnd = (a: number, b: number) => a + Math.random() * (b - a);
+const angTo = (a: XZ, b: XZ) => Math.atan2(b.x - a.x, b.z - a.z);
+const dirOf = (ang: number) => new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang));
+
+const RIM_COLORS: Record<EnemyType, number> = { warrior: 0xff6a5a, archer: 0x9aff7a, necro: 0xc07aff, healer: 0x7af0ff, king: 0xff4040, mimic: 0xffd040 };
+
+export interface EnemyStatus {
+  burn: number; burnDps: number;
+  poison: number; poisonDps: number;
+  slow: number; slowMul: number;
+  stun: number;
+  tick: number;
+}
 
 export class Enemy {
-  constructor(G, type, x, z, room) {
+  G: Game;
+  type: EnemyType;
+  cfg: EnemyDef;
+  room: Room;
+  obj: THREE.Object3D;
+  mfx: CharFx;
+  scale: number;
+  rig?: Rig;            // every enemy except the mimic
+  lid?: THREE.Object3D; // mimic only
+  weaponObj?: THREE.Object3D;
+  pos: THREE.Vector3;
+  knock = new THREE.Vector3();
+  moveDir = new THREE.Vector3();
+  moveSpeed = 0;
+  face: number;
+  hp: number; maxHp: number;
+  radius: number;
+  state = 'spawn'; st = 0;
+  cd = rnd(0.6, 1.4);
+  spawning = true; targetable = false;
+  status: EnemyStatus = { burn: 0, burnDps: 0, poison: 0, poisonDps: 0, slow: 0, slowMul: 1, stun: 0, tick: 0 };
+  dead = false;
+  flashT = 0;
+  shadow: THREE.Mesh;
+  bar: HTMLDivElement | null = null;
+  rimColor: number;
+  hitCount = 0;
+  aiT = 0;
+  goal: THREE.Vector3 | null = null;
+  tele: TimedItem | null = null;
+
+  // per-brain memory
+  lockDir = new THREE.Vector3();          // warrior/king: locked attack direction
+  hitDone = false;                        // warrior: thrust already landed
+  aimLen = 1;                             // archer: telegraph length when aiming started
+  healTargets: Enemy[] = [];              // healer
+  hops = 0;                               // mimic
+  hopFrom = new THREE.Vector3(); hopTo = new THREE.Vector3();
+  enraged = false;                        // king: below half hp
+  lastSummon = 0; lastAtk = '';
+  teles: TimedItem[] | null = null;
+  chargeLen = 0; chargeFrom = new THREE.Vector3();
+
+  constructor(G: Game, type: EnemyType, x: number, z: number, room: Room) {
     this.G = G; this.type = type; this.cfg = ENEMIES[type]; this.room = room;
-    const rim = { warrior: 0xff6a5a, archer: 0x9aff7a, necro: 0xc07aff, healer: 0x7af0ff, king: 0xff4040, mimic: 0xffd040 }[type];
+    const rim = RIM_COLORS[type];
     const { root, fx } = cloneCharacter(this.cfg.model, rim, 0.35);
     this.obj = root; this.mfx = fx;
     G.scene.add(root);
@@ -25,7 +80,7 @@ export class Enemy {
       this.rig.baseScale = this.scale;
       if (this.cfg.weapon) {
         const w = clone(this.cfg.weapon);
-        const basis = type === 'archer' ? 'bow' : type === 'necro' ? 'orb' : 'blade';
+        const basis: GripBasis = type === 'archer' ? 'bow' : type === 'necro' ? 'orb' : 'blade';
         this.rig.attach(w, basis);
         this.weaponObj = w;
         if (type === 'healer') { this.rig.idlePitch = -2.75; }
@@ -37,18 +92,9 @@ export class Enemy {
       this.lid = root.getObjectByName('T_Mimic_Lid');
     }
     this.pos = new THREE.Vector3(x, 0, z);
-    this.knock = new THREE.Vector3();
-    this.moveDir = new THREE.Vector3();
-    this.moveSpeed = 0;
     this.face = angTo(this.pos, G.player.pos);
     this.hp = this.maxHp = this.cfg.hp;
     this.radius = this.cfg.radius;
-    this.state = 'spawn'; this.st = 0;
-    this.cd = rnd(0.6, 1.4);
-    this.spawning = true; this.targetable = false;
-    this.status = { burn: 0, burnDps: 0, poison: 0, poisonDps: 0, slow: 0, slowMul: 1, stun: 0, tick: 0 };
-    this.dead = false;
-    this.flashT = 0;
     // shadow
     const sm = new THREE.MeshBasicMaterial({ map: TEX.shadow, transparent: true, depthWrite: false });
     this.shadow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), sm);
@@ -56,10 +102,9 @@ export class Enemy {
     this.shadow.renderOrder = 2;
     G.scene.add(this.shadow);
     // hp bar (DOM)
-    this.bar = null;
     if (type !== 'king') {
       this.bar = document.createElement('div'); this.bar.className = 'ehp'; this.bar.innerHTML = '<i></i>';
-      document.getElementById('fxLayer').appendChild(this.bar);
+      document.getElementById('fxLayer')!.appendChild(this.bar);
       this.bar.style.display = 'none';
     }
     // spawn presentation
@@ -71,18 +116,15 @@ export class Enemy {
       audio.play('spawn');
     }
     this.rimColor = rim;
-    this.hitCount = 0;
-    this.aiT = 0;
-    this.goal = null;
   }
 
   get player() { return this.G.player; }
   dist() { return this.pos.distanceTo(this.player.pos); }
   slowMul() { return this.status.slow > 0 ? this.status.slowMul : 1; }
 
-  setState(s, t = 0) { this.state = s; this.st = t; }
+  setState(s: string, t = 0) { this.state = s; this.st = t; }
 
-  update(dt) {
+  update(dt: number) {
     if (this.dead) return;
     const G = this.G;
     // status effects
@@ -162,7 +204,7 @@ export class Enemy {
     this.render(dt);
   }
 
-  render(dt) {
+  render(dt: number) {
     const speed01 = this.moveSpeed * this.slowMul() / Math.max(0.1, this.cfg.speed);
     this.rig?.update(dt * (this.status.slow > 0 ? 0.6 : 1), this.status.stun > 0 ? 0 : speed01);
     if (this.type !== 'mimic') {
@@ -178,30 +220,34 @@ export class Enemy {
         this.bar.style.display = 'block';
         const v = _a.set(this.pos.x, 1.35 * this.scale / CHAR_SCALE, this.pos.z).project(this.G.camera);
         this.bar.style.transform = `translate(${(v.x * 0.5 + 0.5) * this.G.W}px, ${(-v.y * 0.5 + 0.5) * this.G.H}px) translate(-50%,-50%)`;
-        this.bar.firstChild.style.width = (this.hp / this.maxHp * 100) + '%';
+        (this.bar.firstChild as HTMLElement).style.width = (this.hp / this.maxHp * 100) + '%';
       }
     }
   }
 
   syncShadow() { this.shadow.position.set(this.pos.x, 0.02, this.pos.z); }
 
-  faceTo(ang, dt, rate = 10) {
+  faceTo(ang: number, dt: number, rate = 10) {
     let d = ang - this.face; d = Math.atan2(Math.sin(d), Math.cos(d));
     this.face += d * Math.min(1, dt * rate);
   }
 
-  walkTo(target, speed, dt) {
+  walkTo(target: THREE.Vector3, speed: number, dt: number) {
     this.G.world.pathDir(this.pos, target, this.moveDir);
     this.moveSpeed = speed;
     if (this.moveDir.lengthSq() > 0.01) this.faceTo(Math.atan2(this.moveDir.x, this.moveDir.z), dt, 8);
   }
 
-  cleanupTele() { if (this.tele) { this.G.fx.kill(this.tele); this.tele = null; } if (this.rig?.action?.dur > 5) this.rig.stop(); if (this.state !== 'idle' && this.state !== 'dormant') this.setState('idle'); }
+  cleanupTele() {
+    if (this.tele) { this.G.fx.kill(this.tele); this.tele = null; }
+    if ((this.rig?.action?.dur ?? 0) > 5) this.rig!.stop();
+    if (this.state !== 'idle' && this.state !== 'dormant') this.setState('idle');
+  }
 
   /** Find a floor cell at preferred distance from the player with line of sight. */
-  pickSpot(minD, maxD, needLos = true) {
+  pickSpot(minD: number, maxD: number, needLos = true) {
     const cells = this.G.world.floorCells(this.room);
-    let best = null, bs = -1e9;
+    let best = this.pos.clone(), bs = -1e9;
     for (let i = 0; i < 18; i++) {
       const c = cells[(Math.random() * cells.length) | 0];
       const d = c.distanceTo(this.player.pos);
@@ -212,12 +258,11 @@ export class Enemy {
     return best;
   }
 
-  brain(dt, realDt) {
-    const fn = BRAINS[this.type];
-    fn && fn(this, dt, realDt);
+  brain(dt: number, realDt: number) {
+    BRAINS[this.type](this, dt, realDt);
   }
 
-  onHurt(amount, info) {
+  onHurt(amount: number, info: HitInfo) {
     this.flashT = 0.1;
     this.rig?.punch(-1.6);
     if (this.type !== 'king' && this.type !== 'mimic' && !info.dot && Math.random() < 0.6 && !this.tele) this.rig?.play('hit');
@@ -233,13 +278,15 @@ export class Enemy {
 }
 
 // ----- telegraph helpers -----
-function teleRect(e, len, width, time, color = 0xff2a2a) {
+function teleRect(e: Enemy, len: number, width: number, time: number, color = 0xff2a2a) {
   return e.G.fx.telegraph({ shape: 'rect', pos: e.pos, dir: dirOf(e.face), length: len, width, time, color });
 }
 
-const BRAINS = {
+type Brain = (e: Enemy, dt: number, realDt: number) => void;
+
+const BRAINS: Record<EnemyType, Brain> = {
   warrior(e, dt) {
-    const G = e.G, P = e.player; const d = e.dist();
+    const G = e.G, P = e.player, rig = e.rig!; const d = e.dist();
     e.st += dt; e.cd -= dt;
     switch (e.state) {
       case 'idle': case 'chase': {
@@ -248,10 +295,10 @@ const BRAINS = {
         if (e.cd <= 0 && d < 2.9 && G.world.los(e.pos, P.pos)) {
           e.face = angTo(e.pos, P.pos);
           if (d < 1.55) {
-            e.setState('teleSlash'); e.rig.hold('windup'); audio.play('telegraph');
+            e.setState('teleSlash'); rig.hold('windup'); audio.play('telegraph');
             e.tele = G.fx.telegraph({ shape: 'sector', pos: e.pos, dir: dirOf(e.face), radius: 1.75, angle: 2.3, time: 0.5 });
           } else {
-            e.setState('teleThrust'); e.rig.hold('windup'); audio.play('telegraph');
+            e.setState('teleThrust'); rig.hold('windup'); audio.play('telegraph');
             e.lockDir = dirOf(e.face);
             e.tele = teleRect(e, 3.0, 0.85, 0.6);
           }
@@ -261,7 +308,7 @@ const BRAINS = {
       case 'teleSlash': {
         e.moveSpeed = 0;
         if (e.st > 0.5) {
-          e.tele = null; e.rig.play('slashE'); audio.play('swing');
+          e.tele = null; rig.play('slashE'); audio.play('swing');
           G.fx.arc(e.pos, dirOf(e.face), { radius: 1.75, inner: 0.3, angle: 2.4, color: 0xff3a3a, life: 0.22 });
           if (d < 1.75 + P.radius && Math.abs(Math.atan2(Math.sin(angTo(e.pos, P.pos) - e.face), Math.cos(angTo(e.pos, P.pos) - e.face))) < 1.25) P.hurt(e.cfg.dmg, e.pos);
           e.setState('recover'); e.cd = rnd(1.2, 1.8);
@@ -270,10 +317,10 @@ const BRAINS = {
       }
       case 'teleThrust': {
         e.moveSpeed = 0;
-        if (e.st < 0.35) { e.faceTo(angTo(e.pos, P.pos), dt, 6); e.lockDir = dirOf(e.face); if (e.tele) e.tele.mesh.rotation.y = e.face + Math.PI; }
-        if (e.tele) e.tele.mesh.position.set(e.pos.x, 0.03, e.pos.z);
+        if (e.st < 0.35) { e.faceTo(angTo(e.pos, P.pos), dt, 6); e.lockDir = dirOf(e.face); if (e.tele?.mesh) e.tele.mesh.rotation.y = e.face + Math.PI; }
+        if (e.tele?.mesh) e.tele.mesh.position.set(e.pos.x, 0.03, e.pos.z);
         if (e.st > 0.6) {
-          e.tele = null; e.rig.play('thrustE'); audio.play('stab');
+          e.tele = null; rig.play('thrustE'); audio.play('stab');
           e.setState('thrust'); e.hitDone = false;
           G.fx.thrust(e.pos.clone().addScaledVector(e.lockDir, 0.4), e.lockDir, { length: 2.4, width: 0.6, color: 0xff5a4a, life: 0.2 });
         }
@@ -298,7 +345,7 @@ const BRAINS = {
   },
 
   archer(e, dt) {
-    const G = e.G, P = e.player; const d = e.dist();
+    const G = e.G, P = e.player, rig = e.rig!; const d = e.dist();
     e.st += dt; e.cd -= dt;
     switch (e.state) {
       case 'idle': case 'move': {
@@ -307,11 +354,11 @@ const BRAINS = {
         if (d < 3) e.goal = e.pickSpot(5, 8);
         e.walkTo(e.goal, e.cfg.speed, dt);
         if (e.cd <= 0 && d < 11 && G.world.los(e.pos, P.pos)) {
-          e.setState('aim'); e.rig.hold('aim'); audio.play('telegraph');
+          e.setState('aim'); rig.hold('aim'); audio.play('telegraph');
           e.face = angTo(e.pos, P.pos);
           e.aimLen = rayLen(G, e.pos, dirOf(e.face), 14);
           e.tele = G.fx.telegraph({ shape: 'rect', pos: e.pos, dir: dirOf(e.face), length: e.aimLen, width: 0.12, time: 0.85, color: 0xff3030 });
-          if (G.onArcherAim) G.onArcherAim(e);
+          G.onArcherAim(e);
         }
         break;
       }
@@ -321,7 +368,7 @@ const BRAINS = {
         if (e.st < lockAt) {
           e.faceTo(angTo(e.pos, P.pos), dt, 14);
         }
-        if (e.tele) {
+        if (e.tele?.mesh) {
           const L = rayLen(G, e.pos, dirOf(e.face), 14);
           e.tele.mesh.rotation.y = e.face + Math.PI;
           e.tele.mesh.position.set(e.pos.x, 0.03, e.pos.z);
@@ -329,7 +376,7 @@ const BRAINS = {
         }
         if (e.st > 0.85) {
           e.tele = null;
-          e.rig.play('shoot'); audio.play('bowShot');
+          rig.play('shoot'); audio.play('bowShot');
           const dir = dirOf(e.face);
           const hp = e.pos.clone().addScaledVector(dir, 0.4); hp.y = 0.55;
           G.shootEnemy('arrow', hp, dir, { speed: 15, dmg: e.cfg.dmg });
@@ -343,7 +390,7 @@ const BRAINS = {
   },
 
   necro(e, dt, realDt) {
-    const G = e.G, P = e.player; const d = e.dist();
+    const G = e.G, P = e.player, rig = e.rig!; const d = e.dist();
     e.st += dt; e.cd -= dt;
     // floating orb glow
     if (e.weaponObj) e.weaponObj.rotation.y += realDt * 3;
@@ -353,7 +400,7 @@ const BRAINS = {
         if (!e.goal || e.aiT <= 0 || e.pos.distanceTo(e.goal) < 0.4) { e.goal = e.pickSpot(4.5, 8); e.aiT = rnd(1.5, 2.6); }
         e.walkTo(e.goal, e.cfg.speed, dt);
         if (e.cd <= 0 && d < 10) {
-          e.setState('cast'); e.rig.hold('castE'); audio.play('orbCast');
+          e.setState('cast'); rig.hold('castE'); audio.play('orbCast');
           e.face = angTo(e.pos, P.pos);
         }
         break;
@@ -362,9 +409,9 @@ const BRAINS = {
         e.moveSpeed = 0;
         e.faceTo(angTo(e.pos, P.pos), dt, 8);
         if (e.weaponObj) e.weaponObj.scale.setScalar(1 + e.st * 1.2);
-        if (Math.random() < dt * 30) G.fx.burst(e.rig.handR.getWorldPosition(new THREE.Vector3()), { count: 1, color: 0xb060ff, speed: 1.5, life: 0.3, size: 0.2, gravity: 0, up: 0.5 });
+        if (Math.random() < dt * 30) G.fx.burst(rig.handR!.getWorldPosition(new THREE.Vector3()), { count: 1, color: 0xb060ff, speed: 1.5, life: 0.3, size: 0.2, gravity: 0, up: 0.5 });
         if (e.st > 0.7) {
-          e.rig.play('throwE');
+          rig.play('throwE');
           if (e.weaponObj) e.weaponObj.scale.setScalar(1);
           const target = P.pos.clone().addScaledVector(P.vel, 0.35);
           target.x += rnd(-0.4, 0.4); target.z += rnd(-0.4, 0.4);
@@ -379,8 +426,8 @@ const BRAINS = {
     }
   },
 
-  healer(e, dt, realDt) {
-    const G = e.G, P = e.player;
+  healer(e, dt) {
+    const G = e.G, P = e.player, rig = e.rig!;
     e.st += dt; e.cd -= dt;
     switch (e.state) {
       case 'idle': case 'flee': {
@@ -391,7 +438,7 @@ const BRAINS = {
         if (e.cd <= 0) {
           const allies = G.enemies.filter((o) => o !== e && !o.dead && !o.spawning && o.hp < o.maxHp && o.pos.distanceTo(e.pos) < 8.5);
           if (allies.length) {
-            e.setState('channel'); e.rig.hold('channel'); e.healTargets = allies;
+            e.setState('channel'); rig.hold('channel'); e.healTargets = allies;
             e.tele = G.fx.decal(e.pos, { tex: TEX.spawn, size: 2.2, color: 0x5aff9a, life: 0.9, fadeIn: 0.1, grow: 0.2 });
           } else e.cd = 0.5;
         }
@@ -413,12 +460,12 @@ const BRAINS = {
               continue;
             }
             G.fx.bolt([from, to], { color: 0x5aff9a, life: 0.35, width: 0.12, jag: 0.12 });
-            const amt = Math.min(e.cfg.heal, o.maxHp - o.hp);
+            const amt = Math.min(e.cfg.heal!, o.maxHp - o.hp);
             o.hp += amt;
             G.fx.text({ x: o.pos.x, y: 1.4, z: o.pos.z }, '+' + Math.round(amt), { color: '#5aff9a', size: 20 });
             G.fx.burst({ x: o.pos.x, y: 0.6, z: o.pos.z }, { count: 10, color: 0x5aff9a, speed: 1.2, life: 0.6, size: 0.2, gravity: -2, up: 1.5 });
           }
-          e.setState('flee'); e.cd = e.cfg.healEvery;
+          e.setState('flee'); e.cd = e.cfg.healEvery!;
         }
         break;
       }
@@ -429,7 +476,7 @@ const BRAINS = {
   mimic(e, dt, realDt) {
     const G = e.G, P = e.player; const d = e.dist();
     e.st += dt;
-    const lid = e.lid;
+    const lid = e.lid!;
     switch (e.state) {
       case 'dormant': {
         e.obj.position.copy(e.pos);
@@ -440,7 +487,7 @@ const BRAINS = {
           e.face = angTo(e.pos, P.pos);
           G.fx.shake(0.4);
           G.fx.text({ x: e.pos.x, y: 1.6, z: e.pos.z }, 'MIMIC!', { color: '#ffd040', size: 30, crit: true, life: 1.1 });
-          G.onMimicReveal?.(e);
+          G.onMimicReveal(e);
         }
         return;
       }
@@ -457,7 +504,7 @@ const BRAINS = {
         lid.rotation.x = -0.15 - Math.abs(Math.sin(e.st * 6)) * 0.2;
         e.faceTo(angTo(e.pos, P.pos), dt, 6);
         if (e.st > 0.55) {
-          e.hops = (e.hops || 0) + 1;
+          e.hops += 1;
           if (e.hops % 4 === 0) { e.setState('bite'); }
           else {
             e.setState('hopTele');
@@ -512,14 +559,14 @@ const BRAINS = {
   },
 
   king(e, dt, realDt) {
-    const G = e.G, P = e.player; const d = e.dist();
+    const G = e.G, P = e.player, rig = e.rig!; const d = e.dist();
     e.st += dt; e.cd -= dt;
     const p2 = e.hp < e.maxHp * 0.5;
     if (p2 && !e.enraged) {
-      e.enraged = true; e.cleanupTele(); e.setState('roar'); e.rig.play('roar'); audio.play('roar');
+      e.enraged = true; e.cleanupTele(); e.setState('roar'); rig.play('roar'); audio.play('roar');
       G.fx.shake(0.8); G.fx.ring(e.pos, { radius: 4, color: 0xff2020, life: 0.6 });
       G.fx.text({ x: e.pos.x, y: 2.4, z: e.pos.z }, 'ENRAGED!', { color: '#ff3a3a', size: 32, crit: true, life: 1.4 });
-      e.mfx.rim.value.set(1.2, 0.15, 0.1);
+      e.mfx.rim.value.setRGB(1.2, 0.15, 0.1);
     }
     if (e.enraged && Math.random() < realDt * 20) G.fx.burst({ x: e.pos.x + rnd(-0.5, 0.5), y: rnd(0.1, 1.4), z: e.pos.z + rnd(-0.5, 0.5) }, { count: 1, color: 0xff2a1a, speed: 0.3, life: 0.6, size: 0.3, gravity: -2.5, up: 0.5 });
     // contact damage
@@ -536,7 +583,7 @@ const BRAINS = {
           e.lastAtk = pick;
           e.face = angTo(e.pos, P.pos);
           if (pick === 'wave') {
-            e.setState('teleWave'); e.rig.hold('windup'); audio.play('telegraph');
+            e.setState('teleWave'); rig.hold('windup'); audio.play('telegraph');
             const n = p2 ? 5 : 3, spread = p2 ? 0.95 : 0.6;
             e.teles = [];
             for (let i = 0; i < n; i++) {
@@ -544,15 +591,15 @@ const BRAINS = {
               e.teles.push(G.fx.telegraph({ shape: 'rect', pos: e.pos, dir: dirOf(a), length: 7, width: 0.5, time: 0.65 }));
             }
           } else if (pick === 'nova') {
-            e.setState('teleNova'); e.rig.hold('raise'); audio.play('telegraph');
+            e.setState('teleNova'); rig.hold('raise'); audio.play('telegraph');
             e.tele = G.fx.telegraph({ shape: 'circle', pos: e.pos, radius: 2.4, time: 0.75 });
           } else if (pick === 'charge') {
-            e.setState('teleCharge'); e.rig.hold('windup'); audio.play('telegraph');
+            e.setState('teleCharge'); rig.hold('windup'); audio.play('telegraph');
             e.lockDir = dirOf(e.face);
             e.chargeLen = Math.min(9, rayLen(G, e.pos, e.lockDir, 10) - 0.6);
             e.tele = G.fx.telegraph({ shape: 'rect', pos: e.pos, dir: e.lockDir, length: e.chargeLen, width: 1.5, time: 0.75 });
           } else {
-            e.setState('summon'); e.rig.hold('raise'); audio.play('roar');
+            e.setState('summon'); rig.hold('raise'); audio.play('roar');
             e.lastSummon = G.time;
           }
         }
@@ -561,7 +608,7 @@ const BRAINS = {
       case 'teleWave': {
         e.moveSpeed = 0;
         if (e.st > 0.65) {
-          e.teles = null; e.rig.play('slashE'); audio.play('slashFire');
+          e.teles = null; rig.play('slashE'); audio.play('slashFire');
           const n = p2 ? 5 : 3, spread = p2 ? 0.95 : 0.6;
           G.fx.arc(e.pos, dirOf(e.face), { radius: 2.4, inner: 0.5, angle: 2.6, color: 0xff2020, life: 0.25 });
           for (let i = 0; i < n; i++) {
@@ -577,7 +624,7 @@ const BRAINS = {
       case 'teleNova': {
         e.moveSpeed = 0;
         if (e.st > 0.75) {
-          e.tele = null; e.rig.play('stomp'); audio.play('boom');
+          e.tele = null; rig.play('stomp'); audio.play('boom');
           G.fx.shake(0.8); G.fx.hitstop(50);
           G.fx.ring(e.pos, { radius: 2.6, color: 0xff3030, life: 0.4 });
           G.fx.decal(e.pos, { tex: TEX.scorch, size: 4, life: 3, additive: false, opacity: 0.8, rot: Math.random() * 6 });
@@ -598,7 +645,7 @@ const BRAINS = {
       }
       case 'teleCharge': {
         e.moveSpeed = 0;
-        if (e.st > 0.75) { e.tele = null; e.rig.hold('spin'); e.setState('charge'); e.chargeFrom = e.pos.clone(); audio.play('swing'); }
+        if (e.st > 0.75) { e.tele = null; rig.hold('spin'); e.setState('charge'); e.chargeFrom = e.pos.clone(); audio.play('swing'); }
         break;
       }
       case 'charge': {
@@ -608,7 +655,7 @@ const BRAINS = {
         const traveled = e.pos.distanceTo(e.chargeFrom);
         if (d < 1.4 + P.radius) P.hurt(2, e.pos);
         if (traveled > e.chargeLen || e.st > 1.0) {
-          e.rig.stop(); audio.play('boom'); G.fx.shake(0.6);
+          rig.stop(); audio.play('boom'); G.fx.shake(0.6);
           G.fx.ring(e.pos, { radius: 2, color: 0xff3030, life: 0.35 });
           for (let i = 0; i < 10; i++) {
             const a = (i / 10) * TAU;
@@ -634,7 +681,7 @@ const BRAINS = {
             G.world.collide(p, 0.4);
             G.spawnEnemy('warrior', p.x, p.z, e.room);
           }
-          e.rig.stop(); e.setState('recover'); e.cd = rnd(1.0, 1.5);
+          rig.stop(); e.setState('recover'); e.cd = rnd(1.0, 1.5);
         }
         break;
       }
@@ -645,12 +692,13 @@ const BRAINS = {
   },
 };
 
-function rayLen(G, from, dir, max) {
+/** How far a shot can travel from `from` along `dir` before hitting something solid. */
+function rayLen(G: Game, from: XZ, dir: XZ, max: number) {
   for (let t = 0.4; t < max; t += 0.2) if (G.world.blocksShot(from.x + dir.x * t, from.z + dir.z * t)) return t;
   return max;
 }
 
-function hideSpot(e) {
+function hideSpot(e: Enemy) {
   const G = e.G, P = e.player;
   const cells = G.world.floorCells(e.room);
   let best = e.pos.clone(), bs = -1e9;
