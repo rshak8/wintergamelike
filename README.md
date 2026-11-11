@@ -1,33 +1,72 @@
-# Dungeon Knight — playable ad (Three.js + Vite)
+# Dungeon Knight — playable-реклама (Three.js + TypeScript + Vite)
 
-3D roguelike playable based on `GDD roguelike.docx`, Soul Knight style.
+3D-рогалик по `GDD roguelike.docx` в стиле Soul Knight. Пять комнат с врагами и босс — Король скелетов.
 
-## Run
+## Запуск
 ```
 npm install
-npm run dev        # http://localhost:5173  (phone frames: /phone.html, /phone.html#both)
-npm run build      # dist/index.html — one self-contained file (~4.5 MB, 1.6 MB gzip)
+npm run dev        # http://localhost:5173  (рамки телефона: /phone.html, /phone.html#both)
+npm run typecheck  # только проверка типов
+npm run build      # проверка типов + dist/index.html — один самодостаточный файл (~4.5 МБ, 1.6 МБ gzip)
 ```
-Store link for the CTA: `CTA_URL` in `src/config.ts` (uses `mraid.open` when available).
+Ссылка на стор для финального экрана: `CTA_URL` в `src/config.ts` (внутри рекламной сети используется `mraid.open`).
 
-## Controls
-Phone-only (portrait and landscape). Drag anywhere = floating joystick. Stop moving = auto-aim + auto-attack.
-On a computer the page shows the game inside a phone frame; open `/?full` to run it full-window.
-Weapon button swaps between two weapons.
+## Управление
+Только телефон (портрет и ландшафт). Ведёшь пальцем — плавающий джойстик. Остановился — автоприцел и автоатака.
+Кнопка оружия меняет одно из двух оружий. На компьютере игра показывается внутри рамки-телефона; `/?full` — на всё окно.
 
-## Structure
-- `blender/` — Python scripts that build every model in Blender (`bh.py` helpers, `build_*.py`), `assets.blend`
-- `src/assets/assets.glb` — exported models (hero, 5 enemies, 12 weapons/projectiles, 17 props)
-- `src/config.ts` — all balance numbers (weapons, buffs, enemies)
-- `src/world.ts` — 6 room layouts as ASCII maps (14×17, boss 14×19), collision, line of sight, BFS pathing, dark rock fill outside the rooms
-- `src/lights.ts` — fixed pool of 8 point lights shared by all torches/braziers/chests (fades between sources, never recompiles shaders)
-- `src/player.ts`, `src/enemies.ts` — hero and enemy AI (warrior, archer, necro, healer, mimic, Skeleton King)
-- `src/anim.ts` — procedural animation rig (run, attacks, hits)
-- `src/fx.ts` — particles, slash trails, telegraphs, lightning, decals, damage numbers, shake, hit-stop
-- `src/audio.ts` — synthesized SFX + music (no audio files)
-- `src/game.ts` — combat, rewards, room flow; `src/ui.ts` — HUD, buff cards, packshot
+## Структура кода
+```
+src/
+  main.ts          точка входа: рендерер, bloom, загрузка, игровой цикл, отладочные хуки
+  config.ts        все числа баланса: оружие, враги, баффы, герой
+  utils.ts         мелкие общие функции (углы, случайные числа, пружина камеры)
+  assets.ts        загрузка assets.glb, клоны моделей, шейдер персонажей, иконки
+  input.ts         плавающий джойстик
+  style.css        весь интерфейс
 
-Rebuild models: in Blender run each script with `exec(open(r"<path>/blender/build_hero.py", encoding="utf-8-sig").read())` (also build_enemies.py, build_weapons.py, build_chests.py; build_props.py for the level kit), then blender/export_glb.py.
-Model rules: smooth shapes from bh.py helpers (tube/lathe/rbox/ell/blade), rounded tips, no sharp spikes. Weapons: grip centre at the origin, handle along +Z. Each fist has a Hand socket in its centre; src/anim.ts Rig.attach puts the grip through the fist.
+  game/            ход игры
+    game.ts          главный объект: создаёт системы и обновляет их каждый кадр
+    combat.ts        урон, криты, статусы, смерть врагов, цепная молния
+    projectiles.ts   снаряды героя и врагов
+    loot.ts          монеты и оружие на полу
+    debris.ts        разлетающиеся части тел и щепки
+    rewards.ts       сундуки, благословения, мимик
+    rooms.ts         вход в комнату, ворота, зачистка, шипы, босс, дверь-выход
+    camera.ts        камера: мягкое следование, границы подземелья
+    tutorial.ts      рука на джойстике, замедление с подсветкой, подсказка смены оружия
+    shared.ts        общие геометрии и материалы (пули, монеты, тени...)
 
-QA hooks: `window.__game`, `window.__step(seconds)` advances the simulation deterministically.
+  player/          герой: движение, автоатака, урон (player.ts) и атаки каждого оружия (attacks.ts)
+  enemies/         enemy.ts — общее для всех врагов; по файлу на поведение каждого:
+                   warrior, archer, necro, healer, mimic, king (босс)
+  world/           maps.ts — ASCII-карты комнат; world.ts — сетка, стены, видимость, поиск пути;
+                   lights.ts — пул из 8 ламп на все факелы
+  anim/            poses.ts — позы атак; rig.ts — процедурная анимация (бег, атаки, оружие в руке)
+  fx/              fx.ts — все эффекты; particles.ts, textures.ts, materials.ts — их части
+  audio/           синтезированные звуки и музыка, без аудиофайлов
+  ui/              ui.ts — HUD, подсказки, выбор благословения, финальный экран
+```
+
+Как всё связано: `Game` создаёт мир, героя и системы; системы обращаются друг к другу через него
+(`game.combat.damageEnemy(...)`, `game.loot.dropCoins(...)`, `game.rooms.activeRoom` и т. д.).
+
+## Модели
+- `blender/` — Python-скрипты, которые строят каждую модель в Blender (помощники `bh.py`, `build_*.py`), `assets.blend`.
+- `src/assets/assets.glb` — экспорт (герой, 5 врагов, 12 оружий и снарядов, 17 пропов).
+
+Пересобрать модели: открыть в Blender `blender/assets.blend` и выполнить каждый скрипт через
+`exec(open(r"<путь>/blender/build_hero.py", encoding="utf-8-sig").read())` (также build_enemies.py, build_weapons.py,
+build_chests.py; build_props.py — набор уровня), затем blender/export_glb.py. Пути в скриптах относительные:
+папка `blender/` берётся рядом со скриптом или рядом с открытым assets.blend.
+Правила моделей: гладкие формы из помощников bh.py (tube/lathe/rbox/ell/blade), скруглённые концы, без острых шипов.
+Оружие: центр рукояти в начале координат, рукоять вдоль +Z. В центре каждого кулака сокет Hand;
+`Rig.attach` (src/anim/rig.ts) вставляет рукоять сквозь кулак.
+
+## Производительность
+Все шейдеры и модели загружаются в видеокарту при старте (`Game.prewarm` → `FX.prewarm`), поэтому в бою ничего
+не компилируется. Новые материалы эффектов создавайте через функции из `src/fx/materials.ts` или `game/shared.ts`,
+иначе они не попадут в прогрев.
+
+## Отладка
+`window.__game` — объект игры, `window.__step(секунды)` — прокрутить симуляцию, `window.__closeup(объект)` — крупный план модели.

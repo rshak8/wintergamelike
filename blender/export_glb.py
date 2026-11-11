@@ -1,7 +1,10 @@
-import bpy, io, contextlib, logging
+import bpy, io, contextlib, logging, os
 
 # Export every asset in COL_Export to the game's GLB.
-OUT = r"C:\Users\Hp\Desktop\winter\src\assets\assets.glb"
+# Папка blender/: рядом с этим скриптом или рядом с открытым assets.blend (без абсолютных путей).
+_here = globals().get("__file__", "")
+BLENDER_DIR = os.path.dirname(os.path.abspath(_here)) if _here.endswith(".py") and os.path.exists(_here) else os.path.dirname(bpy.data.filepath)
+OUT = os.path.normpath(os.path.join(BLENDER_DIR, "..", "src", "assets", "assets.glb"))
 col = bpy.data.collections["COL_Export"]
 bpy.ops.object.select_all(action='DESELECT')
 for o in col.all_objects:

@@ -5,3 +5,12 @@ dist/
 Thumbs.db
 .claude/settings.local.json
 .claude/skills/
+
+# кэш Python (содержит локальные пути)
+__pycache__/
+*.pyc
+
+# секреты и локальные настройки — никогда в репозиторий
+.env
+.env.*
+*.local

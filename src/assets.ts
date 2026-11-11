@@ -1,7 +1,9 @@
+// Загрузка моделей из assets.glb и всё, что из них делается: клоны, инстансы, иконки.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import glbUrl from './assets/assets.glb?url';
 
+/** Оригиналы моделей по имени (корневые объекты из glb). Игра работает только с их клонами. */
 const protos: Record<string, THREE.Object3D> = {};
 
 export async function loadAssets(onProgress?: (p: number) => void) {
@@ -13,33 +15,33 @@ export async function loadAssets(onProgress?: (p: number) => void) {
     child.position.set(0, 0, 0);
     protos[child.name] = child;
     child.traverse((o) => {
-      if (o instanceof THREE.Mesh) {
-        const m = o.material as THREE.MeshStandardMaterial;
-        // stylized: less metal (no env reflections in a dungeon), keep emissive punchy
-        m.metalness = Math.min(m.metalness, 0.35);
-        m.roughness = Math.max(m.roughness, 0.45);
-        if (m.emissiveIntensity > 0 && m.emissive.getHex() !== 0) {
-          m.emissiveIntensity = Math.min(m.emissiveIntensity, 3) * 0.75;
-          m.toneMapped = true;
-        }
-        o.castShadow = false;
-        o.receiveShadow = false;
+      if (!(o instanceof THREE.Mesh)) return;
+      const m = o.material as THREE.MeshStandardMaterial;
+      // стилизация: меньше металла (в подземелье нет окружения для отражений), свечение оставляем сочным
+      m.metalness = Math.min(m.metalness, 0.35);
+      m.roughness = Math.max(m.roughness, 0.45);
+      if (m.emissiveIntensity > 0 && m.emissive.getHex() !== 0) {
+        m.emissiveIntensity = Math.min(m.emissiveIntensity, 3) * 0.75;
+        m.toneMapped = true;
       }
+      o.castShadow = false;
+      o.receiveShadow = false;
     });
   }
   return protos;
 }
 
-export function has(name: string) { return !!protos[name]; }
+export function hasAsset(name: string) { return !!protos[name]; }
 export function assetNames() { return Object.keys(protos); }
 
-/** Plain clone sharing geometry & materials. */
+/** Клон модели. Геометрия и материалы общие с оригиналом. */
 export function clone(name: string): THREE.Object3D {
   const p = protos[name];
   if (!p) throw new Error('missing asset ' + name);
   return p.clone(true);
 }
 
+// Кусок шейдера: подсветка контура (rim), белая вспышка при ударе и цветной оттенок статуса.
 const RIM_CHUNK = `
 #include <emissivemap_fragment>
 {
@@ -50,20 +52,18 @@ const RIM_CHUNK = `
 }
 `;
 
-/** Per-character shader uniforms: hit flash, status tint, rim light. */
-export interface CharFx {
+/** Ручки шейдера персонажа: вспышка при ударе, оттенок статуса (яд, лёд, огонь), цвет контура. */
+export interface CharShading {
   flash: THREE.IUniform<THREE.Vector3>;
-  tint: THREE.IUniform<THREE.Vector4>;
+  tint: THREE.IUniform<THREE.Vector4>;   // rgb + сила (a)
   rim: THREE.IUniform<THREE.Color>;
   materials: THREE.Material[];
 }
 
-/**
- * Clone a character with its own materials that support a rim light, a hit flash and a tint.
- */
+/** Клон персонажа со своими материалами, которые умеют светиться контуром, мигать и окрашиваться. */
 export function cloneCharacter(name: string, rimColor: THREE.ColorRepresentation = 0x6f86c8, rimStrength = 0.55) {
   const root = clone(name);
-  const fx: CharFx = {
+  const shading: CharShading = {
     flash: { value: new THREE.Vector3() },
     tint: { value: new THREE.Vector4(0, 0, 0, 0) },
     rim: { value: new THREE.Color(rimColor).multiplyScalar(rimStrength) },
@@ -77,39 +77,31 @@ export function cloneCharacter(name: string, rimColor: THREE.ColorRepresentation
     if (!m) {
       m = src.clone();
       m.onBeforeCompile = (shader) => {
-        shader.uniforms.uFlash = fx.flash;
-        shader.uniforms.uTint = fx.tint;
-        shader.uniforms.uRim = fx.rim;
+        shader.uniforms.uFlash = shading.flash;
+        shader.uniforms.uTint = shading.tint;
+        shader.uniforms.uRim = shading.rim;
         shader.fragmentShader = shader.fragmentShader
           .replace('#include <common>', '#include <common>\nuniform vec3 uFlash;\nuniform vec4 uTint;\nuniform vec3 uRim;')
           .replace('#include <emissivemap_fragment>', RIM_CHUNK);
       };
+      // одна программа шейдера на всех персонажей
       m.customProgramCacheKey = () => 'charfx';
       cache.set(src, m);
-      fx.materials.push(m);
+      shading.materials.push(m);
     }
     o.material = m;
   });
-  return { root, fx };
+  return { root, shading };
 }
 
-/** Find a node by suffix, e.g. find(root, '_ArmR'). */
-export function find(root: THREE.Object3D, suffix: string): THREE.Object3D | null {
-  let r: THREE.Object3D | null = null;
-  root.traverse((o) => { if (!r && o.name.endsWith(suffix)) r = o; });
-  return r;
-}
-
-/** One copy of a prop for instanced(). sy overrides the vertical scale. */
+/** Описание одной копии пропа для instanced(). sy — отдельный масштаб по высоте. */
 export interface InstanceTransform {
   x: number; y?: number; z: number;
   ry?: number; s?: number; sy?: number;
   color?: THREE.Color;
 }
 
-/**
- * Build InstancedMeshes for many copies of a prop.
- */
+/** Много копий одной модели одним вызовом отрисовки (пол, стены). */
 export function instanced(name: string, transforms: InstanceTransform[], parent: THREE.Object3D) {
   const p = protos[name];
   p.updateMatrixWorld(true);
@@ -141,7 +133,7 @@ export function instanced(name: string, transforms: InstanceTransform[], parent:
 
 export interface IconOptions { rot?: [number, number, number]; size?: number; zoom?: number; focusTop?: number }
 
-/** Render small transparent icons of weapon models (data URLs keyed by model name). */
+/** Рисует маленькие прозрачные иконки моделей (data URL по имени модели) для интерфейса. */
 export function renderIcons(names: string[], { rot = [0, 0.35, -Math.PI / 4], size = 160, zoom = 0.56, focusTop = 0 }: IconOptions = {}) {
   const r = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
   r.setSize(size, size);
@@ -158,12 +150,13 @@ export function renderIcons(names: string[], { rot = [0, 0.35, -Math.PI / 4], si
   const out: Record<string, string> = {};
   for (const n of names) {
     const o = clone(n);
-    o.rotation.set(rot[0], rot[1], rot[2]); // diagonal like an inventory icon
+    o.rotation.set(rot[0], rot[1], rot[2]); // по диагонали, как иконка в инвентаре
     scene.add(o);
     o.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(o);
     const c = box.getCenter(new THREE.Vector3());
     const sz = box.getSize(new THREE.Vector3());
+    // focusTop: показать только верх модели (портрет героя)
     if (focusTop) { c.y = box.max.y - sz.y * focusTop; sz.y *= focusTop * 1.6; }
     o.position.sub(c);
     const ext = Math.max(sz.x, sz.y) * zoom;

@@ -1,5 +1,9 @@
 import sys, importlib, math
-sys.path.insert(0, r"C:\Users\Hp\Desktop\winter\blender")
+import os, bpy
+# Папка blender/: рядом с этим скриптом или рядом с открытым assets.blend (без абсолютных путей).
+_here = globals().get("__file__", "")
+BLENDER_DIR = os.path.dirname(os.path.abspath(_here)) if _here.endswith(".py") and os.path.exists(_here) else os.path.dirname(bpy.data.filepath)
+sys.path.insert(0, BLENDER_DIR)
 import bh; importlib.reload(bh)
 from bh import *
 from mathutils import Vector
