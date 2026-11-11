@@ -21,12 +21,6 @@ button { font-family: var(--font); pointer-events: auto; border: 0; cursor: poin
   text-shadow: 0 2px 0 var(--ink), 2px 0 0 var(--ink), -2px 0 0 var(--ink), 0 -2px 0 var(--ink), 2px 2px 0 var(--ink), -2px 2px 0 var(--ink), 2px -2px 0 var(--ink), -2px -2px 0 var(--ink);
 }
 
-/* loading */
-#loading { position: absolute; inset: 0; z-index: 50; background: radial-gradient(circle at 50% 40%, #1b2140, #090b13 70%); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px; transition: opacity .4s; }
-#loading.done { opacity: 0; pointer-events: none; }
-.ld-title { font-weight: 900; font-size: 34px; letter-spacing: 3px; color: var(--gold); text-shadow: 0 3px 0 #7a4a10, 0 0 20px rgba(255, 190, 60, .4); }
-.ld-bar { width: 60%; max-width: 280px; height: 12px; background: #151a2e; border: 2px solid #2c3352; border-radius: 8px; overflow: hidden; }
-.ld-bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #ff9a2a, #ffd24a); transition: width .2s; }
 
 /* joystick */
 .joy-base { position: absolute; z-index: 12; border-radius: 50%; pointer-events: none; opacity: 0; transition: opacity .12s;
@@ -56,7 +50,8 @@ button { font-family: var(--font); pointer-events: auto; border: 0; cursor: poin
 @keyframes pop { from { transform: scale(0); } }
 
 /* rooms progress */
-.rooms { position: absolute; left: 50%; transform: translateX(-50%); top: max(76px, calc(env(safe-area-inset-top) + 72px)); display: flex; align-items: center; padding: 5px 8px; background: var(--panel); border: 2px solid var(--edge); border-radius: 20px; }
+.rooms { position: absolute; left: 50%; transform: translateX(-50%); top: max(76px, calc(env(safe-area-inset-top) + 72px)); display: flex; align-items: center; padding: 5px 8px; background: var(--panel); border: 2px solid var(--edge); border-radius: 20px; transition: opacity .35s, translate .35s; }
+.rooms.hidden { opacity: 0; translate: 0 -14px; pointer-events: none; }
 .landscape .rooms { top: max(12px, env(safe-area-inset-top)); }
 .rdot { width: 12px; height: 12px; border-radius: 50%; background: #2a3150; border: 2px solid #3d4670; display: flex; align-items: center; justify-content: center; font-size: 10px; transition: all .3s; }
 .rdot.skull { width: 18px; height: 18px; color: #ff6a6a; font-size: 12px; }
@@ -106,6 +101,10 @@ button { font-family: var(--font); pointer-events: auto; border: 0; cursor: poin
 .w-alt img { width: 100%; height: 100%; object-fit: contain; }
 .w-swap { display: none; position: absolute; left: -10px; top: 22px; font-size: 13px; font-weight: 900; color: #fff; text-shadow: 0 2px 0 #000; }
 .weapon-btn.two .w-alt, .weapon-btn.two .w-swap { display: block; }
+.w-tip { position: absolute; right: -4px; bottom: calc(100% + 18px); white-space: nowrap; padding: 4px 9px; border-radius: 9px; background: var(--panel); border: 2px solid var(--wc, var(--edge));
+  font-size: 13px; font-weight: 900; color: #fff; text-shadow: 0 2px 0 var(--ink); pointer-events: none; opacity: 0; translate: 0 6px; transition: opacity .3s, translate .3s; }
+.w-tip::after { content: ''; position: absolute; right: 30px; top: 100%; border: 6px solid transparent; border-top-color: var(--wc, var(--edge)); }
+.weapon-btn.tip .w-tip { opacity: 1; translate: 0 0; }
 .w-name { position: absolute; left: 50%; bottom: -15px; transform: translateX(-50%); white-space: nowrap; font-size: 11px; font-weight: 900; color: var(--wc); }
 
 /* weapon card */

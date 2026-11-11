@@ -43,7 +43,6 @@ const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.45, 0.4, 0.9);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
-const bar = document.querySelector<HTMLElement>('#loading .ld-bar i')!;
 let game: Game | null = null;
 
 function resize() {
@@ -58,7 +57,7 @@ function resize() {
 window.addEventListener('resize', resize);
 
 async function boot() {
-  await loadAssets((p) => { bar.style.width = (p * 90) + '%'; });
+  await loadAssets();
   const weaponModels = [...new Set(Object.values(WEAPONS).map((w) => w.model))];
   const icons = renderIcons(weaponModels);
   const heroIcon = renderIcons(['Hero'], { rot: [0.15, -0.35, 0], size: 200, zoom: 0.6, focusTop: 0.55 }).Hero;
@@ -69,8 +68,6 @@ async function boot() {
   resize();
   // pre-compile shaders so the first hit doesn't hitch
   renderer.compile(scene, camera);
-  bar.style.width = '100%';
-  setTimeout(() => document.getElementById('loading')!.classList.add('done'), 150);
   // sound and music start on the very first tap anywhere (capture phase, so buttons count too)
   const startSound = () => { audio.unlock(); audio.musicOn(true); };
   for (const ev of ['pointerdown', 'touchstart', 'touchend', 'click', 'keydown']) window.addEventListener(ev, startSound, { capture: true, once: true });
@@ -107,7 +104,4 @@ async function boot() {
   document.addEventListener('visibilitychange', () => { last = performance.now(); });
 }
 
-boot().catch((e) => {
-  console.error(e);
-  document.querySelector('#loading .ld-title')!.textContent = 'Failed to load';
-});
+boot().catch((e) => console.error(e));

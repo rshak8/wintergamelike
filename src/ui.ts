@@ -4,7 +4,7 @@ import type { Game } from './game';
 
 const $ = (html: string) => { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstChild as HTMLElement; };
 
-export interface HintOpts { hand?: boolean; time?: number; warn?: boolean; stop?: boolean; swap?: boolean }
+export interface HintOpts { hand?: boolean; time?: number; warn?: boolean; stop?: boolean }
 
 export class UI {
   icons: Record<string, string>;
@@ -22,6 +22,7 @@ export class UI {
   vig: HTMLElement; fadeEl: HTMLElement;
   hintT?: ReturnType<typeof setTimeout>;
   lagT?: ReturnType<typeof setTimeout>;
+  tipT?: ReturnType<typeof setTimeout>;
 
   constructor(icons: Record<string, string>, heroIcon: string) {
     this.icons = icons; this.heroIcon = heroIcon;
@@ -48,6 +49,7 @@ export class UI {
         <div class="w-alt"><img alt=""></div>
         <div class="w-name"></div>
         <div class="w-swap">⇄</div>
+        <div class="w-tip"></div>
       </button>
       <div class="vignette"></div>
       <div class="fade"></div>
@@ -65,7 +67,7 @@ export class UI {
     for (let i = 1; i <= 6; i++) rh += `<div class="rdot ${i === 6 ? 'skull' : ''}" data-i="${i}">${i === 6 ? '☠' : ''}</div>${i < 6 ? '<div class="rline"></div>' : ''}`;
     this.roomsEl.innerHTML = rh;
     const stop = (e: Event) => e.stopPropagation();
-    this.wbtn.addEventListener('pointerdown', (e) => { stop(e); this.G?.player.swap(); this.wbtn.classList.remove('pulse'); this.wbtn.classList.add('press'); setTimeout(() => this.wbtn.classList.remove('press'), 120); });
+    this.wbtn.addEventListener('pointerdown', (e) => { stop(e); this.G?.player.swap(); this.hideWeaponTip(); this.wbtn.classList.add('press'); setTimeout(() => this.wbtn.classList.remove('press'), 120); });
   }
 
   bind(G: Game) { this.G = G; this.updateHp(); this.updateWeapons(); this.setRoom(1); this.updateCoins(); }
@@ -111,13 +113,24 @@ export class UI {
     });
   }
 
-  hint(text: string, { hand = false, time = 0, warn = false, stop = false, swap = false }: HintOpts = {}) {
+  /** The room progress bar is hidden while a fight is on. */
+  showRooms(on: boolean) { this.roomsEl.classList.toggle('hidden', !on); }
+
+  hint(text: string, { hand = false, time = 0, warn = false, stop = false }: HintOpts = {}) {
     this.hintEl.querySelector('span')!.textContent = text;
     this.hintEl.className = 'hint show' + (hand ? ' with-hand' : '') + (warn ? ' warn' : '') + (stop ? ' stop' : '');
     clearTimeout(this.hintT);
     if (time) this.hintT = setTimeout(() => this.hintEl.classList.remove('show'), time * 1000);
-    if (swap) this.wbtn.classList.add('pulse');
   }
+
+  /** Small label right above the weapon button; fades out by itself (or when the button is tapped). */
+  weaponTip(text: string, time = 3) {
+    this.wbtn.querySelector('.w-tip')!.textContent = text;
+    this.wbtn.classList.add('tip', 'pulse');
+    clearTimeout(this.tipT);
+    this.tipT = setTimeout(() => this.hideWeaponTip(), time * 1000);
+  }
+  hideWeaponTip() { clearTimeout(this.tipT); this.wbtn.classList.remove('tip', 'pulse'); }
   hideHint() { this.hintEl.classList.remove('show'); }
 
   toast(title: string, sub = '') {

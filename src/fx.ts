@@ -16,7 +16,7 @@ function canvasTex(size: number, draw: (g: CanvasRenderingContext2D, s: number) 
   return t;
 }
 
-type TexName = 'dot' | 'glow' | 'shadow' | 'ring' | 'scorch' | 'holy' | 'rune' | 'spawn' | 'crescent';
+type TexName = 'dot' | 'glow' | 'soft' | 'shadow' | 'ring' | 'scorch' | 'holy' | 'rune' | 'spawn' | 'crescent';
 /** Filled when FX is created (before the world and characters are built). */
 export const TEX = {} as Record<TexName, THREE.CanvasTexture>;
 
@@ -29,6 +29,15 @@ function makeTextures() {
   TEX.glow = canvasTex(128, (g, s) => {
     const gr = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
     gr.addColorStop(0, 'rgba(255,255,255,0.9)'); gr.addColorStop(0.4, 'rgba(255,255,255,0.35)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, s, s);
+  });
+  // gaussian-like falloff with no visible edge: light pools and halos
+  TEX.soft = canvasTex(256, (g, s) => {
+    const gr = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+    for (let i = 0; i <= 12; i++) {
+      const t = i / 12;
+      gr.addColorStop(t, `rgba(255,255,255,${(Math.exp(-t * t * 5) * (1 - t)).toFixed(4)})`);
+    }
     g.fillStyle = gr; g.fillRect(0, 0, s, s);
   });
   TEX.shadow = canvasTex(64, (g, s) => {

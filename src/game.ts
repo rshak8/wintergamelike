@@ -15,9 +15,24 @@ import {
 
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
-const _u = new THREE.Vector3();
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 const shuffle = <T>(a: T[]): T[] => { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+/**
+ * Critically damped spring toward target (no overshoot). vel keeps the motion continuous
+ * between frames, so the camera accelerates and brakes smoothly instead of snapping.
+ */
+function smoothDamp(cur: THREE.Vector3, target: THREE.Vector3, vel: THREE.Vector3, smoothTime: number, dt: number) {
+  const omega = 2 / smoothTime;
+  const x = omega * dt;
+  const k = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  for (const a of ['x', 'y', 'z'] as const) {
+    const change = cur[a] - target[a];
+    const temp = (vel[a] + omega * change) * dt;
+    vel[a] = (vel[a] - omega * temp) * k;
+    cur[a] = target[a] + (change + temp) * k;
+  }
+}
 
 /** Everything a hit can carry: knockback, status effects, where it came from. */
 export interface HitInfo {
@@ -89,13 +104,14 @@ export class Game {
   boss: Enemy | null = null;
   camPos = new THREE.Vector3();
   camTarget: THREE.Vector3;
+  camVel = new THREE.Vector3();
   camFocus: { pos: THREE.Vector3; t: number } | null = null;
   camOffset = { x: 0, y: 0, z: 0 };
   camReady = false;
   view: View | null = null;
   weaponPool: WeaponId[];
   rewards: Partial<Record<number, Reward>>;
-  tutorial = { moved: false, stopHint: false, dodgeHint: false };
+  tutorial = { moved: false, stopHint: false };
   swapHinted = false;
   exitAnim = 0;
   lights: LightPool;
@@ -476,8 +492,7 @@ export class Game {
     // tutorial hints
     if (!this.tutorial.moved && this.input.read().mag > 0.2) {
       this.tutorial.moved = true;
-      if (this.currentRoom === 1) this.ui.hint('Follow the corridor up', { time: 2.2 });
-      else this.ui.hideHint();
+      this.ui.hideHint();
     }
     if (this.activeRoom?.index === 2 && !this.tutorial.stopHint && this.activeRoom.spawned) {
       if (this.enemies.some((e) => e.targetable)) {
@@ -507,6 +522,7 @@ export class Game {
     this.activeRoom = room;
     this.player.cantDie = room.index === 2;
     for (const g of room.gates) { this.world.setGate(g, true); g.anim = 0; }
+    this.ui.showRooms(false);
     audio.play('gate');
     this.fx.shake(0.3);
     audio.setIntensity(1);
@@ -545,6 +561,7 @@ export class Game {
     room.cleared = true; room.active = false;
     this.activeRoom = null;
     audio.setIntensity(0);
+    this.ui.showRooms(true);
     if (room.index === 6) return; // boss handled separately
     audio.play('clear');
     this.fx.slowmo(0.45, 0.3);
@@ -679,14 +696,6 @@ export class Game {
     setTimeout(() => this.offerBuffs(), 900);
   }
 
-  onArcherAim(_e: Enemy) {
-    if (this.activeRoom?.index === 2 && !this.tutorial.dodgeHint) {
-      this.tutorial.dodgeHint = true;
-      this.fx.slowmo(1.1, 0.25);
-      this.ui.hint('Dodge the arrows!', { time: 2.4, warn: true });
-    }
-  }
-
   onBossDeath(k: Enemy) {
     this.ui.hideBoss();
     this.fx.slowmo(1.6, 0.2);
@@ -711,6 +720,7 @@ export class Game {
     setTimeout(() => {
       audio.play('clear');
       this.ui.toast('VICTORY!', 'The exit is open');
+      this.ui.showRooms(true);
       this.world.openExit();
       this.exitAnim = 0;
       audio.play('gateOpen');
@@ -825,7 +835,7 @@ export class Game {
           this.fx.ring(P.pos, { radius: 1.8, color: w.color, life: 0.4 });
           this.ui.hideWeaponCard();
           this.ui.toast(w.name.toUpperCase(), w.desc);
-          if (P.weapons.length === 2 && !this.swapHinted) { this.swapHinted = true; setTimeout(() => this.ui.hint('Tap the weapon button to swap', { time: 2.6, swap: true }), 1800); }
+          if (P.weapons.length === 2 && !this.swapHinted) { this.swapHinted = true; setTimeout(() => this.ui.weaponTip('Tap to swap'), 1800); }
         }
       }
     }
@@ -856,8 +866,9 @@ export class Game {
     const ts = this.world.torches;
     for (const t of ts) {
       const fl = 0.85 + Math.sin(this.time * 13 + t.phase) * 0.1 + Math.sin(this.time * 31 + t.phase) * 0.05;
-      if (t.sprite) t.sprite.scale.setScalar((t.brazier ? 1.4 : 0.95) * fl);
-      if (t.pool) t.pool.material.opacity = 0.32 * fl;
+      if (t.sprite) t.sprite.scale.setScalar((t.brazier ? 0.95 : 0.65) * fl);
+      if (t.halo) t.halo.scale.setScalar((t.brazier ? 3.6 : 2.8) * (0.92 + fl * 0.1));
+      if (t.pool) t.pool.material.opacity = 0.2 * fl;
       if (Math.random() < dt * 5) this.fx.burst({ x: t.x, y: t.y + 0.1, z: t.z }, { count: 1, color: 0xffa040, speed: 0.2, life: 0.6, size: 0.12, gravity: -1.5, up: 0.3 });
     }
   }
@@ -871,39 +882,25 @@ export class Game {
       if (this.camFocus.t <= 0) this.camFocus = null;
     }
     const want = _w.copy(target);
-    // the camera trails the hero a little; if it ever ends up past the room edge
-    // (e.g. right after a room change) it catches up fast instead
-    let rate = this.camFocus ? 3 : 4.5; // 4.5 → about one tile of lag at full run speed
     if (this.view) {
       if (!this.camFocus) want.z -= this.view.ahead;
-      this.clampToRoom(want, target);
-      if (!this.camReady) { this.camTarget.copy(want); this.camReady = true; }
-      const cur = _u.copy(this.camTarget);
-      this.clampToRoom(cur, target);
-      if (cur.distanceToSquared(this.camTarget) > 1e-4) rate = 9;
+      // the camera follows the hero anywhere; only the outer walls of the map stop it
+      this.clampView(want);
+      if (!this.camReady) { this.camTarget.copy(want); this.camVel.set(0, 0, 0); this.camReady = true; }
     }
-    this.camTarget.lerp(want, 1 - Math.exp(-dt * rate));
+    // spring-damped follow: eases in and out, no snapping. 0.22 s ≈ one tile of lag at full run speed
+    smoothDamp(this.camTarget, want, this.camVel, this.camFocus ? 0.45 : 0.22, dt);
     const off = this.camOffset;
     const sh = this.fx.shakeOffset(this.time);
     this.camera.position.set(this.camTarget.x + off.x + sh.x, off.y, this.camTarget.z + off.z + sh.z);
     this.camera.lookAt(this.camTarget.x + sh.x, 0, this.camTarget.z + sh.z);
   }
 
-  /** Keep everything the camera sees inside the room (walls included), so nothing behind the room shows. */
-  clampToRoom(want: THREE.Vector3, target: THREE.Vector3) {
+  /** Keep everything the camera sees inside the dungeon, so nothing beyond the map ever shows. */
+  clampView(want: THREE.Vector3) {
     const W = this.world, v = this.view!;
-    const r = W.row(target.z);
-    let top = -Infinity, bottom = Infinity;
-    const room = W.roomAtRow(r);
-    if (room) { top = room.zTop - 0.5; bottom = room.zBottom + 0.5; }
-    else {
-      // in a corridor: allow the span from the room above to the room below
-      for (const rm of W.rooms) {
-        if (!rm) continue;
-        if (rm.rowBottom < r) top = Math.max(top, rm.zTop - 0.5);
-        if (rm.rowTop > r) bottom = Math.min(bottom, rm.zBottom + 0.5);
-      }
-    }
+    const top = W.bossRoom.zTop - 0.5;
+    const bottom = W.rooms[1]!.zBottom + 0.5;
     const lo = top - v.top, hi = bottom - v.bottom;
     want.z = lo > hi ? (lo + hi) / 2 : Math.max(lo, Math.min(hi, want.z));
     const maxX = Math.max(0, W.half - v.halfTop);

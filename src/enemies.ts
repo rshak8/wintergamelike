@@ -358,7 +358,6 @@ const BRAINS: Record<EnemyType, Brain> = {
           e.face = angTo(e.pos, P.pos);
           e.aimLen = rayLen(G, e.pos, dirOf(e.face), 14);
           e.tele = G.fx.telegraph({ shape: 'rect', pos: e.pos, dir: dirOf(e.face), length: e.aimLen, width: 0.12, time: 0.85, color: 0xff3030 });
-          G.onArcherAim(e);
         }
         break;
       }

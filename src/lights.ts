@@ -8,6 +8,7 @@ export interface LightSource {
   range: number;
   flicker: boolean;
   phase?: number; // flicker offset
+  decay?: number; // distance falloff; lower = light spreads further (default 1.7)
 }
 
 interface LightSlot { light: THREE.PointLight; src: LightSource | null; w: number }
@@ -74,6 +75,7 @@ export class LightPool {
       l.position.set(s.x, s.y, s.z);
       l.color.copy(s.color);
       l.distance = s.range;
+      l.decay = s.decay ?? 1.7; // a uniform, so changing it never recompiles shaders
       l.intensity = s.intensity * k * slot.w;
     }
   }

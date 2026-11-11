@@ -172,9 +172,11 @@ export interface Torch {
   room?: Room;
   brazier?: boolean;
   phase: number;
+  dir?: XZ;              // wall torches: direction out of the wall into the room
   obj?: THREE.Object3D;
   pool?: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
-  sprite?: THREE.Sprite;
+  sprite?: THREE.Sprite; // bright flame core
+  halo?: THREE.Sprite;   // wide soft glow around the flame
 }
 
 export interface Spikes {
@@ -401,13 +403,19 @@ export class World {
     o.rotation.y = Math.atan2(dir.x, dir.z) + Math.PI; // model faces -Y(blender) => +Z; mount points out of wall
     this.group.add(o);
     const fx = x + dir.x * 0.17, fz = z + dir.z * 0.17;
-    this.addTorchLight({ x: fx, y: 1.02, z: fz, room, phase: Math.random() * 10, obj: o });
+    this.addTorchLight({ x: fx, y: 1.02, z: fz, room, phase: Math.random() * 10, obj: o, dir });
   }
 
   addTorchLight(t: Torch) {
     this.torches.push(t);
-    // the real light sits a bit above and in front of the flame
-    this.lights.push({ x: t.x, y: t.y + 0.35, z: t.z, color: new THREE.Color(t.brazier ? 0xff8a34 : 0xff9a40), intensity: t.brazier ? 8 : 7, range: 6.5, flicker: true, phase: t.phase });
+    // The real light sits well out from the wall and above the flame, with a gentle falloff:
+    // it washes over the room floor instead of making a hot spot at the foot of the wall.
+    const out = t.dir ? 1.0 : 0;
+    this.lights.push({
+      x: t.x + (t.dir?.x ?? 0) * out, y: t.y + 1.3, z: t.z + (t.dir?.z ?? 0) * out,
+      color: new THREE.Color(t.brazier ? 0xff8a34 : 0xff9a40), intensity: t.brazier ? 7 : 6, range: 10, decay: 1,
+      flicker: true, phase: t.phase,
+    });
   }
 
   addBanner(x: number, z: number, dir: XZ) {
@@ -450,18 +458,23 @@ export class World {
   }
 
   addVoidDust() {
-    // soft blue glow on floor near torches (fake bounce light)
+    // wide, soft warm pool on the floor in front of each torch (fake bounce light)
     for (const t of this.torches) {
-      const m = new THREE.MeshBasicMaterial({ map: TEX.glow, color: 0xff8a30, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending });
-      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.2).rotateX(-Math.PI / 2), m);
-      mesh.position.set(t.x, 0.015, t.z);
+      const dx = t.dir?.x ?? 0, dz = t.dir?.z ?? 0;
+      const m = new THREE.MeshBasicMaterial({ map: TEX.soft, color: 0xff8a30, transparent: true, opacity: 0.2, depthWrite: false, blending: THREE.AdditiveBlending });
+      const size = t.brazier ? 5 : 6;
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2), m);
+      mesh.position.set(t.x + dx * 1.6, 0.015, t.z + dz * 1.6);
       mesh.renderOrder = 3;
       this.group.add(mesh);
       t.pool = mesh;
-      // flame glow sprite
-      const sm = new THREE.SpriteMaterial({ map: TEX.glow, color: 0xffa040, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
-      const s = new THREE.Sprite(sm); s.scale.setScalar(0.9); s.position.set(t.x, t.y, t.z); s.renderOrder = 24;
-      this.group.add(s); t.sprite = s;
+      // flame: small hot core + a big hazy halo around it (pulled out of the wall so the wall doesn't cut it)
+      const cm = new THREE.SpriteMaterial({ map: TEX.glow, color: 0xffd890, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+      const core = new THREE.Sprite(cm); core.scale.setScalar(0.55); core.position.set(t.x, t.y, t.z); core.renderOrder = 24;
+      this.group.add(core); t.sprite = core;
+      const hm = new THREE.SpriteMaterial({ map: TEX.soft, color: 0xff8a30, transparent: true, opacity: 0.38, depthWrite: false, blending: THREE.AdditiveBlending });
+      const halo = new THREE.Sprite(hm); halo.scale.setScalar(2.8); halo.position.set(t.x + dx * 0.4, t.y + 0.05, t.z + dz * 0.4); halo.renderOrder = 23;
+      this.group.add(halo); t.halo = halo;
     }
   }
 
