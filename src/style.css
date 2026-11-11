@@ -54,9 +54,12 @@ button { font-family: var(--font); pointer-events: auto; border: 0; cursor: poin
 .rooms.hidden { opacity: 0; translate: 0 -14px; pointer-events: none; }
 .landscape .rooms { top: max(12px, env(safe-area-inset-top)); }
 .rdot { width: 12px; height: 12px; border-radius: 50%; background: #2a3150; border: 2px solid #3d4670; display: flex; align-items: center; justify-content: center; font-size: 10px; transition: all .3s; }
-.rdot.skull { width: 18px; height: 18px; color: #ff6a6a; font-size: 12px; }
 .rdot.done { background: #5aff7a; border-color: #2a9a4a; }
 .rdot.cur { background: var(--gold); border-color: #fff; transform: scale(1.3); box-shadow: 0 0 10px var(--gold); }
+/* комната босса: не кружок, а крупный красный череп */
+.rdot.skull, .rdot.skull.done, .rdot.skull.cur { width: 24px; height: 24px; margin: -4px 0 -4px 2px; background: none; border: none; box-shadow: none;
+  font-size: 23px; line-height: 1; color: #ff3b3b; text-shadow: 0 2px 0 var(--ink), 0 0 2px var(--ink), 0 0 8px rgba(255, 40, 40, .75); }
+.rdot.skull.cur { transform: scale(1.2); color: #ff5a5a; text-shadow: 0 2px 0 var(--ink), 0 0 2px var(--ink), 0 0 14px rgba(255, 40, 40, 1); }
 .rline { width: 10px; height: 3px; background: #3d4670; }
 
 /* полоса здоровья босса */
@@ -155,9 +158,10 @@ button { font-family: var(--font); pointer-events: auto; border: 0; cursor: poin
 .ehp i { display: block; height: 100%; background: #ff4a4a; transition: width .12s; }
 
 /* красная виньетка при уроне */
-.vignette { position: absolute; inset: 0; box-shadow: inset 0 0 90px 30px rgba(255, 20, 30, .65); opacity: 0; }
-.vignette.hit { animation: vig .45s; }
-@keyframes vig { 0% { opacity: 1; } 100% { opacity: 0; } }
+.vignette { position: absolute; inset: 0; box-shadow: inset 0 0 80px 28px rgba(255, 16, 32, .78); opacity: 0; }
+/* быстро вспыхивает, держится и плавно гаснет — чтобы удар было видно краем глаза */
+.vignette.hit { animation: vig .6s ease-out; }
+@keyframes vig { 0% { opacity: 0; } 10% { opacity: 1; } 40% { opacity: .85; } 100% { opacity: 0; } }
 .fade { position: absolute; inset: 0; background: #fff; opacity: 0; transition: opacity .7s; }
 .fade.on { opacity: 1; }
 

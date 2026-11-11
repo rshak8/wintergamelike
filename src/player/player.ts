@@ -131,6 +131,7 @@ export class Player {
     this.pos.addScaledVector(this.lungeVel, dt);
     this.lungeVel.multiplyScalar(Math.exp(-dt * 14));
     world.collide(this.pos, this.radius);
+    this.keepOutOfEnemies();
 
     // поворот: в движении — по ходу, стоя — на цель
     let faceTo: number | null = null;
@@ -172,6 +173,27 @@ export class Player {
       this.aimRing.scale.setScalar(this.target.radius * 2.6 * (1 + Math.sin(this.game.time * 10) * 0.06));
       this.aimRing.rotation.y += dt * 2;
     } else this.aimRing.visible = false;
+  }
+
+  /**
+   * Герой не может зайти в тело врага: его выталкивает наружу, а часть рывка, направленная
+   * во врага, гасится. Иначе рывок атаки заносил героя в босса, и тот ранил касанием.
+   */
+  private keepOutOfEnemies() {
+    let pushed = false;
+    for (const e of this.game.enemies) {
+      if (e.dead || e.spawning) continue;
+      const dx = this.pos.x - e.pos.x, dz = this.pos.z - e.pos.z;
+      const minDist = e.radius + this.radius + 0.05; // небольшой зазор, чтобы касание не засчитывалось
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= minDist * minDist || d2 < 1e-6) continue;
+      const d = Math.sqrt(d2), nx = dx / d, nz = dz / d;
+      this.pos.x = e.pos.x + nx * minDist; this.pos.z = e.pos.z + nz * minDist;
+      const into = -(this.lungeVel.x * nx + this.lungeVel.z * nz);
+      if (into > 0) { this.lungeVel.x += nx * into; this.lungeVel.z += nz * into; }
+      pushed = true;
+    }
+    if (pushed) this.game.world.collide(this.pos, this.radius); // не вытолкнуть в стену
   }
 
   /** Ближайший враг в пределах досягаемости; кого видно напрямую — предпочтительнее. */

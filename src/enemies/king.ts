@@ -7,10 +7,14 @@
 import { audio } from '../audio/audio';
 import { TEX } from '../fx/textures';
 import { rand, angleTo, dirFromAngle } from '../utils';
-import { rayLength, muzzle, type Brain } from './helpers';
+import { rayLength, muzzle, heroInCircle, type Brain } from './helpers';
 import type { Enemy } from './enemy';
 
 const TAU = Math.PI * 2;
+const NOVA_RADIUS = 2.4;
+// задержки до момента удара по анимации: взмах (slashE) и удар кулаками об пол (stomp)
+const SWING_HIT_DELAY = 0.09;
+const STOMP_HIT_DELAY = 0.12;
 
 /** Направления полумесяцев волны: n штук веером вокруг facing. */
 function waveAngles(self: Enemy, enraged: boolean) {
@@ -62,7 +66,7 @@ export const king: Brain = (self, dt, realDt) => {
         self.telegraphs = waveAngles(self, phase2).map((a) => fx.telegraph({ shape: 'rect', pos: self.pos, dir: dirFromAngle(a), length: 7, width: 0.5, time: 0.65 }));
       } else if (pick === 'nova') {
         self.setState('teleNova'); rig.hold('raise'); audio.play('telegraph');
-        self.telegraph = fx.telegraph({ shape: 'circle', pos: self.pos, radius: 2.4, time: 0.75 });
+        self.telegraph = fx.telegraph({ shape: 'circle', pos: self.pos, radius: NOVA_RADIUS, time: 0.75 });
       } else if (pick === 'charge') {
         self.setState('teleCharge'); rig.hold('windup'); audio.play('telegraph');
         self.lockDir = dirFromAngle(self.facing);
@@ -79,11 +83,14 @@ export const king: Brain = (self, dt, realDt) => {
       if (self.stateTime > 0.65) {
         self.telegraphs = null; rig.play('slashE'); audio.play('slashFire');
         fx.slash(self.pos, dirFromAngle(self.facing), { radius: 2.4, inner: 0.5, angle: 2.6, color: 0xff2020, life: 0.25 });
-        for (const a of waveAngles(self, phase2)) {
-          const dir = dirFromAngle(a);
-          game.projectiles.shootEnemy('crescent', muzzle(self, dir, 0.8, 0.5), dir, { speed: 8.5, dmg: 2 });
-        }
-        fx.shake(0.3);
+        // полумесяцы срываются с клинка, когда он проходит перед королём
+        self.schedule(SWING_HIT_DELAY, () => {
+          for (const a of waveAngles(self, phase2)) {
+            const dir = dirFromAngle(a);
+            game.projectiles.shootEnemy('crescent', muzzle(self, dir, 0.8, 0.5), dir, { speed: 8.5, dmg: 2 });
+          }
+          fx.shake(0.3);
+        });
         self.setState('recover'); self.cooldown = rand(0.9, 1.4) / speedMult;
       }
       break;
@@ -91,14 +98,18 @@ export const king: Brain = (self, dt, realDt) => {
     case 'teleNova': {
       self.moveSpeed = 0;
       if (self.stateTime > 0.75) {
-        self.telegraph = null; rig.play('stomp'); audio.play('boom');
-        fx.shake(0.8); fx.hitstop(50);
-        fx.ring(self.pos, { radius: 2.6, color: 0xff3030, life: 0.4 });
-        fx.decal(self.pos, { tex: TEX.scorch, size: 4, life: 3, additive: false, opacity: 0.8, rot: Math.random() * 6 });
-        fx.burst({ x: self.pos.x, y: 0.1, z: self.pos.z }, { count: 24, color: 0x5a5060, speed: 4, life: 0.6, size: 0.35, gravity: 5, up: 3, additive: false });
-        if (d < 2.4 + hero.radius) hero.hurt(3, self.pos);
-        const rings = phase2 ? 2 : 1;
-        for (let r = 0; r < rings; r++) bulletRing(self, 14 + r * 4, 4.8 + r * 1.4, r * 0.2);
+        self.telegraph = null; rig.play('stomp');
+        // ударная волна — в момент, когда кулаки по анимации врезаются в пол; хитбокс = круг на полу
+        self.schedule(STOMP_HIT_DELAY, () => {
+          audio.play('boom');
+          fx.shake(0.8); fx.hitstop(50);
+          fx.ring(self.pos, { radius: 2.6, color: 0xff3030, life: 0.4 });
+          fx.decal(self.pos, { tex: TEX.scorch, size: 4, life: 3, additive: false, opacity: 0.8, rot: Math.random() * 6 });
+          fx.burst({ x: self.pos.x, y: 0.1, z: self.pos.z }, { count: 24, color: 0x5a5060, speed: 4, life: 0.6, size: 0.35, gravity: 5, up: 3, additive: false });
+          if (heroInCircle(self, self.pos, NOVA_RADIUS)) hero.hurt(3, self.pos);
+          const rings = phase2 ? 2 : 1;
+          for (let r = 0; r < rings; r++) bulletRing(self, 14 + r * 4, 4.8 + r * 1.4, r * 0.2);
+        });
         self.setState('recover'); self.cooldown = rand(1.0, 1.5) / speedMult;
       }
       break;

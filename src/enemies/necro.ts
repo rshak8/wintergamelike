@@ -5,6 +5,8 @@ import { audio } from '../audio/audio';
 import { rand, angleTo } from '../utils';
 import type { Brain } from './helpers';
 
+const THROW_DELAY = 0.1; // анимация throwE: рука доходит вперёд примерно через 0.1 с
+
 export const necro: Brain = (self, dt, realDt) => {
   const { game } = self, hero = self.player, rig = self.rig!, fx = game.fx;
   const d = self.distToPlayer();
@@ -29,11 +31,14 @@ export const necro: Brain = (self, dt, realDt) => {
       if (self.stateTime > 0.7) {
         rig.play('throwE');
         if (self.weaponModel) self.weaponModel.scale.setScalar(1);
-        // целимся с упреждением, с небольшим разбросом
-        const target = hero.pos.clone().addScaledVector(hero.vel, 0.35);
-        target.x += rand(-0.4, 0.4); target.z += rand(-0.4, 0.4);
-        const from = self.pos.clone(); from.y = 0.9;
-        game.projectiles.shootEnemy('orb', from, null, { target, dmg: self.def.dmg, radius: 1.45, speed: 5.2 });
+        // шар вылетает, когда рука по анимации заканчивает бросок
+        self.schedule(THROW_DELAY, () => {
+          // целимся с упреждением, с небольшим разбросом
+          const target = hero.pos.clone().addScaledVector(hero.vel, 0.35);
+          target.x += rand(-0.4, 0.4); target.z += rand(-0.4, 0.4);
+          const from = self.pos.clone(); from.y = 0.9;
+          game.projectiles.shootEnemy('orb', from, null, { target, dmg: self.def.dmg, radius: 1.45, speed: 5.2 });
+        });
         self.setState('recover'); self.cooldown = rand(2.4, 3.2);
       }
       break;

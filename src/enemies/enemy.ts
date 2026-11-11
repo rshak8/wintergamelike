@@ -59,6 +59,8 @@ export class Enemy {
   hpBar: HTMLDivElement | null = null;
   /** Зона опасности текущей атаки. */
   telegraph: TimedItem | null = null;
+  /** Отложенные удары: срабатывают, когда оружие по анимации доходит до цели. */
+  private scheduled: { time: number; fn: () => void }[] = [];
 
   // ---- память мозгов (у каждого типа свои поля) ----
   goal: THREE.Vector3 | null = null;        // куда идёт (лучник, некромант, лекарь)
@@ -139,11 +141,27 @@ export class Enemy {
       if (Math.random() < dt * 8) this.game.fx.burst({ x: this.pos.x + rand(-0.3, 0.3), y: 1.25 * this.scale / CHAR_SCALE, z: this.pos.z + rand(-0.3, 0.3) }, { count: 1, color: 0xffe066, speed: 0.6, life: 0.5, size: 0.2, gravity: 0, up: 0 });
       this.clearTelegraph();
     } else {
+      this.runScheduled(dt);
       // лёд замедляет и мысли (таймеры атак), и шаги
       BRAINS[this.type](this, dt * this.slowFactor(), dt);
     }
     this.move(dt);
     this.render(dt);
+  }
+
+  /**
+   * Нанести удар через time секунд — в момент, когда оружие по анимации доходит до цели
+   * (а не в первый кадр замаха). Время идёт с той же скоростью, что и анимация.
+   */
+  schedule(time: number, fn: () => void) { this.scheduled.push({ time, fn }); }
+
+  private runScheduled(dt: number) {
+    const animDt = dt * (this.status.slow > 0 ? 0.6 : 1); // как в render(): лёд замедляет анимацию
+    for (let i = this.scheduled.length - 1; i >= 0; i--) {
+      const s = this.scheduled[i];
+      s.time -= animDt;
+      if (s.time <= 0) { this.scheduled.splice(i, 1); s.fn(); }
+    }
   }
 
   /** Тикают статусы, частицы и цвет. true — если враг от этого умер. */
@@ -248,9 +266,10 @@ export class Enemy {
     if (this.moveDir.lengthSq() > 0.01) this.turnTowards(Math.atan2(this.moveDir.x, this.moveDir.z), dt, 8);
   }
 
-  /** Отменить текущую атаку: убрать зону опасности и удерживаемую позу. */
+  /** Отменить текущую атаку: убрать зону опасности, удерживаемую позу и ещё не нанесённый удар. */
   clearTelegraph() {
     if (this.telegraph) { this.game.fx.kill(this.telegraph); this.telegraph = null; }
+    this.scheduled.length = 0;
     if ((this.rig?.action?.dur ?? 0) > 5) this.rig!.stop();
     if (this.state !== 'idle' && this.state !== 'dormant') this.setState('idle');
   }
@@ -274,7 +293,9 @@ export class Enemy {
   onHurt(hit: HitInfo) {
     this.flashTime = 0.1;
     this.rig?.punch(-1.6);
-    if (this.type !== 'king' && this.type !== 'mimic' && !hit.dot && Math.random() < 0.6 && !this.telegraph) this.rig?.play('hit');
+    // не перебиваем замах и уже идущий удар
+    const attacking = !!this.telegraph || this.scheduled.length > 0;
+    if (this.type !== 'king' && this.type !== 'mimic' && !hit.dot && Math.random() < 0.6 && !attacking) this.rig?.play('hit');
     if (this.type === 'healer') this.goal = null; // лекарь после удара сразу ищет новое укрытие
   }
 }

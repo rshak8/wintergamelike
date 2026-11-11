@@ -51,6 +51,7 @@ export class UI {
     this.overlay = document.getElementById('overlay')!;
     this.hud.innerHTML = `
       <div class="spot"></div>
+      <div class="vignette"></div>
       <div class="top-left">
         <div class="portrait" style="background-image:url(${heroIcon})"></div>
         <div class="bars">
@@ -74,7 +75,6 @@ export class UI {
         <div class="w-swap">⇄</div>
         <div class="w-tip"></div>
       </button>
-      <div class="vignette"></div>
       <div class="fade"></div>
     `;
     const find = <T extends HTMLElement = HTMLElement>(s: string) => this.hud.querySelector<T>(s)!;
@@ -88,8 +88,9 @@ export class UI {
     this.vignette = find('.vignette'); this.fadeEl = find('.fade');
     this.spotEl = find('.spot');
     // шкала пути: 5 кружков комнат и череп босса
+    // (︎ — показать ☠ как символ, а не цветной эмодзи, чтобы работал наш красный цвет)
     let dots = '';
-    for (let i = 1; i <= 6; i++) dots += `<div class="rdot ${i === 6 ? 'skull' : ''}" data-i="${i}">${i === 6 ? '☠' : ''}</div>${i < 6 ? '<div class="rline"></div>' : ''}`;
+    for (let i = 1; i <= 6; i++) dots += `<div class="rdot ${i === 6 ? 'skull' : ''}" data-i="${i}">${i === 6 ? '☠︎' : ''}</div>${i < 6 ? '<div class="rline"></div>' : ''}`;
     this.roomsEl.innerHTML = dots;
     this.weaponBtn.addEventListener('pointerdown', (e) => {
       e.stopPropagation(); // нажатие на кнопку не должно включать джойстик
