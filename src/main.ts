@@ -66,8 +66,8 @@ async function boot() {
   const g = game = new Game({ scene, camera, input, ui });
   window.__game = g; window.__renderer = renderer; // debug hooks
   resize();
-  // pre-compile shaders so the first hit doesn't hitch
-  renderer.compile(scene, camera);
+  // pre-compile every shader (level, effects, enemies, projectiles) so nothing hitches mid-play
+  g.prewarm(renderer, composer.renderTarget1);
   // sound and music start on the very first tap anywhere (capture phase, so buttons count too)
   const startSound = () => { audio.unlock(); audio.musicOn(true); };
   for (const ev of ['pointerdown', 'touchstart', 'touchend', 'click', 'keydown']) window.addEventListener(ev, startSound, { capture: true, once: true });

@@ -126,6 +126,9 @@ const ROOM6 = [
 ];
 const CORR = ['     #..#     ', '     #..#     ', '     #..#     ', '     #..#     '];
 
+const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
+const DIRS8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]] as const;
+
 const SPAWN_CODES: Record<string, EnemyType> = { w: 'warrior', a: 'archer', n: 'necro', h: 'healer', k: 'king' };
 
 export const TILE = { FLOOR: 0, WALL: 1, PROP: 2, PILLAR: 3, VOID: 4, GATE: 5 } as const;
@@ -211,6 +214,7 @@ export class World {
   exitLight!: LightSource;
   exitOpen = false;
   private _flow = new Map<string, { t: number; d: Int16Array }>();
+  private queue!: Int32Array; // BFS work queue, reused by flow()
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -233,6 +237,7 @@ export class World {
     this.half = this.W / 2;
     this.zOff = -(this.H - 6); // put the start room near z=0
     this.grid = new Uint8Array(this.W * this.H);
+    this.queue = new Int32Array(this.W * this.H);
     this.build();
   }
 
@@ -525,16 +530,16 @@ export class World {
     const cached = this._flow.get(key);
     if (cached && now - cached.t < 250) return cached.d;
     const d = new Int16Array(this.W * this.H).fill(-1);
-    const q = [this.idx(tc, tr)]; d[q[0]] = 0;
+    const q = this.queue; let qn = 0; q[qn++] = this.idx(tc, tr); d[q[0]] = 0;
     let h = 0;
-    while (h < q.length) {
+    while (h < qn) {
       const i = q[h++]; const c = i % this.W, r = (i / this.W) | 0;
-      for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      for (const [dc, dr] of DIRS4) {
         const nc = c + dc, nr = r + dr;
         if (this.tileAt(nc, nr) !== TILE.FLOOR) continue;
         const ni = this.idx(nc, nr);
         if (d[ni] >= 0) continue;
-        d[ni] = d[i] + 1; q.push(ni);
+        d[ni] = d[i] + 1; q[qn++] = ni;
       }
     }
     this._flow.set(key, { t: now, d });
@@ -544,14 +549,13 @@ export class World {
 
   /** Direction (x,z normalized) to walk from pos toward target using the flow field. */
   pathDir(pos: THREE.Vector3, target: THREE.Vector3, out: THREE.Vector3) {
-    const [tc, tr] = this.cell(target.x, target.z);
     if (this.los(pos, target) && this.clearPath(pos, target)) {
       out.set(target.x - pos.x, 0, target.z - pos.z); const l = out.length(); if (l > 1e-4) out.multiplyScalar(1 / l); return out;
     }
-    const d = this.flow(tc, tr);
-    const [c, r] = this.cell(pos.x, pos.z);
+    const d = this.flow(this.col(target.x), this.row(target.z));
+    const c = this.col(pos.x), r = this.row(pos.z);
     let best = d[this.idx(c, r)], bc = c, br = r;
-    for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+    for (const [dc, dr] of DIRS8) {
       const nc = c + dc, nr = r + dr;
       if (this.tileAt(nc, nr) !== TILE.FLOOR) continue;
       if (dc && dr && (this.tileAt(c + dc, r) !== TILE.FLOOR || this.tileAt(c, r + dr) !== TILE.FLOOR)) continue;

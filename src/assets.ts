@@ -31,6 +31,7 @@ export async function loadAssets(onProgress?: (p: number) => void) {
 }
 
 export function has(name: string) { return !!protos[name]; }
+export function assetNames() { return Object.keys(protos); }
 
 /** Plain clone sharing geometry & materials. */
 export function clone(name: string): THREE.Object3D {

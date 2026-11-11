@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { clone } from './assets';
+import { clone, cloneCharacter, assetNames } from './assets';
 import { Player } from './player';
 import { Enemy } from './enemies';
 import { World, type Prop, type Room, type Spawn } from './world';
@@ -9,7 +9,7 @@ import { LightPool, type LightSource } from './lights';
 import type { Input } from './input';
 import type { UI } from './ui';
 import {
-  WEAPONS, CHEST_WEAPONS, BUFFS, CHAR_SCALE,
+  WEAPONS, CHEST_WEAPONS, BUFFS, ENEMIES, CHAR_SCALE,
   type BuffId, type DotEffect, type EnemyType, type SlowEffect, type WeaponDef, type WeaponId,
 } from './config';
 
@@ -61,7 +61,7 @@ type EnemyShotKind = OrbProjectile['kind'] | EnemyShot['kind'];
 interface EnemyShotOpts { speed: number; dmg: number; target?: THREE.Vector3; radius?: number }
 
 interface CoinPickup { kind: 'coin'; obj: THREE.Object3D; pos: THREE.Vector3; vel: THREE.Vector3; age: number }
-interface WeaponPickup { kind: 'weapon'; id: WeaponId; obj: THREE.Object3D; ring: THREE.Mesh; pos: THREE.Vector3; from: THREE.Vector3; age: number }
+interface WeaponPickup { kind: 'weapon'; id: WeaponId; obj: THREE.Object3D; ring: THREE.Mesh; pos: THREE.Vector3; from: THREE.Vector3; age: number; cardShown: boolean }
 type Pickup = CoinPickup | WeaponPickup;
 
 interface Debris { obj: THREE.Object3D; vel: THREE.Vector3; life: number; max: number; av: THREE.Vector3; small: boolean; s0: THREE.Vector3 }
@@ -81,6 +81,28 @@ interface Chest {
 /** What the camera sees on the ground, relative to its target (set in resize). */
 interface View { top: number; bottom: number; halfTop: number; ahead: number }
 
+/**
+ * Meshes that appear many times (bullets, crescents, debris, shadows) all share these,
+ * instead of making a new geometry/material per shot that is never freed.
+ */
+function makeShared() {
+  const additive = { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending } as const;
+  return {
+    floorQuad: new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+    shadowMat: new THREE.MeshBasicMaterial({ map: TEX.shadow, transparent: true, depthWrite: false }),
+    crescentGeo: new THREE.PlaneGeometry(1.6, 1.6).rotateX(-Math.PI / 2),
+    crescentMat: new THREE.MeshBasicMaterial({ map: TEX.crescent, color: 0xff2a2a, side: THREE.DoubleSide, ...additive }),
+    bulletMat: new THREE.SpriteMaterial({ map: TEX.dot, color: 0xff3a2a, transparent: true, depthWrite: false }),
+    bulletCoreMat: new THREE.SpriteMaterial({ map: TEX.dot, color: 0xffffff, transparent: true, depthWrite: false }),
+    orbGlowMat: new THREE.SpriteMaterial({ map: TEX.glow, color: 0xa040ff, ...additive }),
+    boltGlowMat: new THREE.SpriteMaterial({ map: TEX.glow, color: 0xb08aff, ...additive }),
+    boltCoreMat: new THREE.SpriteMaterial({ map: TEX.dot, color: 0xffffff, ...additive }),
+    debrisGeo: new THREE.BoxGeometry(1, 1, 1),
+    debrisMats: new Map<number, THREE.MeshStandardMaterial>(),
+  };
+}
+export type Shared = ReturnType<typeof makeShared>;
+
 export interface GameDeps { scene: THREE.Scene; camera: THREE.PerspectiveCamera; input: Input; ui: UI }
 
 export class Game {
@@ -90,6 +112,7 @@ export class Game {
   ui: UI;
   time = 0;
   fx: FX;
+  shared: Shared;
   world: World;
   enemies: Enemy[] = [];
   projectiles: Projectile[] = [];
@@ -112,6 +135,7 @@ export class Game {
   weaponPool: WeaponId[];
   rewards: Partial<Record<number, Reward>>;
   tutorial = { moved: false, stopHint: false };
+  spot: { enemy: Enemy; t: number } | null = null; // tutorial spotlight on the hero + one enemy
   swapHinted = false;
   exitAnim = 0;
   lights: LightPool;
@@ -122,6 +146,7 @@ export class Game {
   constructor({ scene, camera, input, ui }: GameDeps) {
     this.scene = scene; this.camera = camera; this.input = input; this.ui = ui;
     this.fx = new FX(scene, camera);
+    this.shared = makeShared(); // after FX: needs its textures
     this.world = new World(scene);
     this.player = new Player(this);
     this.camTarget = this.player.pos.clone();
@@ -138,8 +163,29 @@ export class Game {
     ui.bind(this);
   }
 
+  /** Compile every shader the game can need right now, so nothing compiles (and hitches) mid-play. */
+  prewarm(renderer: THREE.WebGLRenderer, target: THREE.WebGLRenderTarget) {
+    const s = this.shared;
+    const extra: THREE.Object3D[] = [
+      new THREE.Mesh(s.crescentGeo, s.crescentMat),
+      new THREE.Mesh(this.coinGeo, this.coinMat),
+      new THREE.Mesh(s.debrisGeo, this.debrisMat(0x8a5a34)),
+      new THREE.Sprite(s.bulletMat),
+    ];
+    for (const name of assetNames()) extra.push(clone(name)); // weapons, projectiles, chests, props
+    for (const def of Object.values(ENEMIES)) extra.push(cloneCharacter(def.model).root); // enemy rim/flash shader
+    this.fx.prewarm(renderer, this.camera, extra, target);
+  }
+
+  /** One shared material per debris colour. */
+  debrisMat(color: number) {
+    let m = this.shared.debrisMats.get(color);
+    if (!m) { m = new THREE.MeshStandardMaterial({ color, roughness: 0.9 }); this.shared.debrisMats.set(color, m); }
+    return m;
+  }
+
   start() {
-    this.ui.hint('Drag anywhere to move', { hand: true });
+    this.ui.handTutorial(true);
     this.input.enabled = true;
   }
 
@@ -207,7 +253,8 @@ export class Game {
       this.fx.shake(0.2);
       // debris chunks
       for (let i = 0; i < 5; i++) {
-        const m = new THREE.Mesh(new THREE.BoxGeometry(rnd(0.12, 0.3), rnd(0.05, 0.1), rnd(0.12, 0.25)), new THREE.MeshStandardMaterial({ color: c, roughness: 0.9 }));
+        const m = new THREE.Mesh(this.shared.debrisGeo, this.debrisMat(c));
+        m.scale.set(rnd(0.12, 0.3), rnd(0.05, 0.1), rnd(0.12, 0.25));
         m.position.set(p.x, 0.4, p.z);
         this.scene.add(m);
         this.addDebris(m, new THREE.Vector3(rnd(-3, 3), rnd(3, 6), rnd(-3, 3)), 1.4, true);
@@ -225,8 +272,9 @@ export class Game {
     e.onHurt(amount, info);
     const hpPos = { x: e.pos.x, y: 1.3 * e.scale / CHAR_SCALE, z: e.pos.z };
     const txt = amount >= 1 ? Math.round(amount).toString() : amount.toFixed(1);
-    if (info.dot) this.fx.text(hpPos, txt, { color: info.color, size: 16, life: 0.55, rise: 0.8 });
-    else this.fx.text(hpPos, txt + (crit ? '!' : ''), { color: crit ? '#ffd23a' : '#ffffff', size: crit ? 30 : 22, crit });
+    // damage numbers stay small; crits stand out by colour and a slightly bigger size
+    if (info.dot) this.fx.text(hpPos, txt, { color: info.color, size: 12, life: 0.55, rise: 0.8 });
+    else this.fx.text(hpPos, txt, { color: crit ? '#ffd23a' : '#ffffff', size: crit ? 21 : 15, crit });
     if (!info.dot) {
       audio.play('hit', { pitch: crit ? 1.3 : 1 + Math.random() * 0.2 });
       const dir = info.dir || _v.set(0, 0, 1);
@@ -244,7 +292,7 @@ export class Game {
       }
       if (info.poison) { e.status.poison = info.poison.time; e.status.poisonDps = info.poison.dps; audio.play('poison'); }
       if (info.slow) {
-        if (e.status.slow <= 0) this.fx.text({ x: e.pos.x, y: hpPos.y + 0.35, z: e.pos.z }, 'SLOW', { color: '#8fe6ff', size: 15 });
+        if (e.status.slow <= 0) this.fx.text({ x: e.pos.x, y: hpPos.y + 0.35, z: e.pos.z }, 'SLOW', { color: '#8fe6ff', size: 12 });
         e.status.slow = info.slow.time; e.status.slowMul = info.slow.mult;
       }
       if (info.stun && e.type !== 'king') { e.status.stun = info.stun; }
@@ -307,9 +355,8 @@ export class Game {
     let obj: THREE.Object3D;
     if (kind === 'ice') { obj = clone('P_IceArrow'); obj.scale.setScalar(1.3); }
     else {
-      const m = new THREE.SpriteMaterial({ map: TEX.glow, color: 0xb08aff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
-      obj = new THREE.Sprite(m); obj.scale.setScalar(0.9);
-      const core = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.dot, color: 0xffffff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+      obj = new THREE.Sprite(this.shared.boltGlowMat); obj.scale.setScalar(0.9);
+      const core = new THREE.Sprite(this.shared.boltCoreMat);
       core.scale.setScalar(0.45); obj.add(core);
     }
     obj.position.copy(from);
@@ -322,17 +369,15 @@ export class Game {
     if (kind === 'arrow') { obj = clone('P_Arrow'); obj.scale.setScalar(1.4); radius = 0.2; audio.play('arrowFly'); }
     else if (kind === 'orb') {
       obj = clone('W_NecroOrb'); obj.scale.setScalar(1.6);
-      const gl = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, color: 0xa040ff, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+      const gl = new THREE.Sprite(this.shared.orbGlowMat);
       gl.scale.setScalar(1.4); obj.add(gl);
       radius = 0.3; life = 9;
     } else if (kind === 'crescent') {
-      const m = new THREE.MeshBasicMaterial({ map: TEX.crescent, color: 0xff2a2a, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
-      obj = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6).rotateX(-Math.PI / 2), m);
+      obj = new THREE.Mesh(this.shared.crescentGeo, this.shared.crescentMat);
       radius = 0.5;
     } else { // bullet
-      const m = new THREE.SpriteMaterial({ map: TEX.dot, color: 0xff3a2a, transparent: true, depthWrite: false });
-      obj = new THREE.Sprite(m); obj.scale.setScalar(0.55);
-      const core = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.dot, color: 0xffffff, transparent: true, depthWrite: false }));
+      obj = new THREE.Sprite(this.shared.bulletMat); obj.scale.setScalar(0.55);
+      const core = new THREE.Sprite(this.shared.bulletCoreMat);
       core.scale.setScalar(0.5); obj.add(core);
       radius = 0.2;
     }
@@ -492,12 +537,18 @@ export class Game {
     // tutorial hints
     if (!this.tutorial.moved && this.input.read().mag > 0.2) {
       this.tutorial.moved = true;
-      this.ui.hideHint();
+      this.ui.handTutorial(false);
     }
+    // first fight: when the hero first walks up to an enemy, slow time down, spotlight the hero
+    // and that enemy, and teach the auto-attack
     if (this.activeRoom?.index === 2 && !this.tutorial.stopHint && this.activeRoom.spawned) {
-      if (this.enemies.some((e) => e.targetable)) {
+      const near = this.enemies.find((e) => e.targetable && !e.dead && e.pos.distanceTo(P.pos) < 4.5);
+      if (near) {
         this.tutorial.stopHint = true;
-        this.ui.hint('STOP to auto-attack!', { hand: false, stop: true, time: 3.2 });
+        this.fx.slowmo(2.2, 0.3);
+        this.spot = { enemy: near, t: 2.2 };
+        this.ui.spotlight(true);
+        this.ui.hint('STOP TO', { second: 'AUTO-ATTACK', time: 2.6, low: true });
       }
     }
     // spikes
@@ -531,7 +582,7 @@ export class Game {
       this.bossIntro(room, spawns);
       return;
     }
-    this.ui.toast(`ROOM ${room.index - 1}`, room.index === 2 ? 'Defeat the skeletons' : `${spawns.length} enemies`);
+    this.ui.toast(`ROOM ${room.index - 1}`);
     spawns.forEach((s, i) => {
       setTimeout(() => { if (!this.over) this.spawnEnemy(s.type, s.x, s.z, room); if (i === spawns.length - 1) room.spawned = true; }, 450 + i * 260);
     });
@@ -565,7 +616,7 @@ export class Game {
     if (room.index === 6) return; // boss handled separately
     audio.play('clear');
     this.fx.slowmo(0.45, 0.3);
-    this.ui.toast('ROOM CLEAR!', 'HP restored');
+    this.ui.toast('ROOM CLEAR!', '', 'white');
     const P = this.player;
     const missing = P.maxHp - P.hp;
     P.heal(P.maxHp);
@@ -660,8 +711,7 @@ export class Game {
     const ring = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.6).rotateX(-Math.PI / 2), ringMat);
     ring.position.set(pos.x, 0.04, pos.z - 0.9);
     this.scene.add(ring);
-    this.pickups.push({ kind: 'weapon', id, obj: holder, ring, pos: new THREE.Vector3(pos.x, 0, pos.z - 0.9), age: 0, from: new THREE.Vector3(pos.x, 0.8, pos.z) });
-    this.ui.weaponCard(id);
+    this.pickups.push({ kind: 'weapon', id, obj: holder, ring, pos: new THREE.Vector3(pos.x, 0, pos.z - 0.9), age: 0, from: new THREE.Vector3(pos.x, 0.8, pos.z), cardShown: false });
   }
 
   offerBuffs() {
@@ -682,12 +732,12 @@ export class Game {
     audio.play('buff');
     this.fx.burst({ x: P.pos.x, y: 0.3, z: P.pos.z }, { count: 36, color: BUFFS[k].color, speed: 2, life: 1, size: 0.25, gravity: -4, up: 2 });
     this.fx.ring(P.pos, { radius: 2, color: BUFFS[k].color, life: 0.5 });
-    this.fx.text({ x: P.pos.x, y: 1.6, z: P.pos.z }, BUFFS[k].desc, { color: BUFFS[k].color, size: 22, life: 1.3 });
+    this.fx.text({ x: P.pos.x, y: 1.6, z: P.pos.z }, BUFFS[k].desc, { color: BUFFS[k].color, size: 15, life: 1.4 });
     P.rig.punch(2);
     this.ui.updateHp(); this.ui.addBuff(k);
   }
 
-  onMimicReveal(_e: Enemy) { this.ui.toast('MIMIC!', 'Defeat it for double loot'); audio.setIntensity(1); }
+  onMimicReveal(_e: Enemy) { audio.setIntensity(1); }
 
   onMimicDeath(e: Enemy) {
     audio.setIntensity(0);
@@ -768,6 +818,24 @@ export class Game {
     this.updateLights(realDt);
     this.fx.update(dt, realDt, this.W, this.H);
     this.updateCamera(realDt);
+    this.updateSpotlight(realDt);
+  }
+
+  /** Keep the spotlight windows on the hero and the enemy as they move. */
+  updateSpotlight(dt: number) {
+    if (!this.spot) return;
+    this.spot.t -= dt;
+    if (this.spot.t <= 0) { this.spot = null; this.ui.spotlight(false); return; }
+    const hole = (p: THREE.Vector3, height: number) => {
+      const feet = _w.set(p.x, 0, p.z).project(this.camera);
+      const fx = (feet.x * 0.5 + 0.5) * this.W, fy = (-feet.y * 0.5 + 0.5) * this.H;
+      const head = _w.set(p.x, height, p.z).project(this.camera);
+      const hy = (-head.y * 0.5 + 0.5) * this.H;
+      const h = Math.abs(fy - hy);
+      return { x: fx, y: (fy + hy) / 2, r: Math.max(60, h * 1.15) };
+    };
+    const e = this.spot.enemy;
+    this.ui.setSpot(hole(this.player.pos, 1.5), hole(e.pos, 1.5 * e.scale / CHAR_SCALE));
   }
 
   updateGates(dt: number) {
@@ -825,7 +893,11 @@ export class Game {
         p.obj.position.y = 0.9 + Math.sin(k * Math.PI) * 1.2 + Math.sin(this.time * 3) * 0.1;
         p.obj.rotation.y += dt * 2.5;
         p.ring.rotation.y -= dt;
-        if (p.age > 0.7 && P.pos.distanceTo(p.pos) < 1.0) {
+        // the weapon's info card shows only while the hero is close to it
+        const dist = P.pos.distanceTo(p.pos);
+        const near = p.age > 0.6 && dist < 5.5;
+        if (near !== p.cardShown) { p.cardShown = near; if (near) this.ui.weaponCard(p.id); else this.ui.hideWeaponCard(); }
+        if (p.age > 0.7 && dist < 1.0) {
           this.scene.remove(p.obj); this.scene.remove(p.ring); this.pickups.splice(i, 1);
           P.addWeapon(p.id);
           audio.play('pickup');
@@ -834,7 +906,6 @@ export class Game {
           this.fx.burst({ x: P.pos.x, y: 0.5, z: P.pos.z }, { count: 30, color: w.color, speed: 3, life: 0.7, size: 0.22, gravity: -2, up: 2 });
           this.fx.ring(P.pos, { radius: 1.8, color: w.color, life: 0.4 });
           this.ui.hideWeaponCard();
-          this.ui.toast(w.name.toUpperCase(), w.desc);
           if (P.weapons.length === 2 && !this.swapHinted) { this.swapHinted = true; setTimeout(() => this.ui.weaponTip('Tap to swap'), 1800); }
         }
       }

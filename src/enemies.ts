@@ -96,8 +96,7 @@ export class Enemy {
     this.hp = this.maxHp = this.cfg.hp;
     this.radius = this.cfg.radius;
     // shadow
-    const sm = new THREE.MeshBasicMaterial({ map: TEX.shadow, transparent: true, depthWrite: false });
-    this.shadow = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), sm);
+    this.shadow = new THREE.Mesh(G.shared.floorQuad, G.shared.shadowMat);
     this.shadow.scale.setScalar(this.radius * 3);
     this.shadow.renderOrder = 2;
     G.scene.add(this.shadow);
@@ -454,14 +453,14 @@ const BRAINS: Record<EnemyType, Brain> = {
             const to = o.pos.clone(); to.y = 0.7;
             if (o.status.poison > 0) {
               G.fx.bolt([from, to], { color: 0x5a7a5a, life: 0.25, width: 0.08, jag: 0.15 });
-              G.fx.text({ x: o.pos.x, y: 1.4, z: o.pos.z }, 'NO HEAL', { color: '#7aff5a', size: 16 });
+              G.fx.text({ x: o.pos.x, y: 1.4, z: o.pos.z }, 'NO HEAL', { color: '#7aff5a', size: 12 });
               audio.play('healBlocked');
               continue;
             }
             G.fx.bolt([from, to], { color: 0x5aff9a, life: 0.35, width: 0.12, jag: 0.12 });
             const amt = Math.min(e.cfg.heal!, o.maxHp - o.hp);
             o.hp += amt;
-            G.fx.text({ x: o.pos.x, y: 1.4, z: o.pos.z }, '+' + Math.round(amt), { color: '#5aff9a', size: 20 });
+            G.fx.text({ x: o.pos.x, y: 1.4, z: o.pos.z }, '+' + Math.round(amt), { color: '#5aff9a', size: 15 });
             G.fx.burst({ x: o.pos.x, y: 0.6, z: o.pos.z }, { count: 10, color: 0x5aff9a, speed: 1.2, life: 0.6, size: 0.2, gravity: -2, up: 1.5 });
           }
           e.setState('flee'); e.cd = e.cfg.healEvery!;

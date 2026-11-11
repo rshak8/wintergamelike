@@ -52,8 +52,8 @@ export class Player {
     this.rig.baseScale = CHAR_SCALE;
     this.pos = G.world.start.clone();
     // blob shadow
-    const sm = new THREE.MeshBasicMaterial({ map: TEX.shadow, transparent: true, depthWrite: false });
-    this.shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.9).rotateX(-Math.PI / 2), sm);
+    this.shadow = new THREE.Mesh(G.shared.floorQuad, G.shared.shadowMat);
+    this.shadow.scale.setScalar(0.9);
     this.shadow.renderOrder = 2;
     G.scene.add(this.shadow);
     // aim indicator under target
@@ -292,7 +292,7 @@ export class Player {
     this.inv = PLAYER.invuln;
     audio.play('playerHurt');
     G.fx.shake(0.55); G.fx.hitstop(60);
-    G.fx.text({ x: this.pos.x, y: 1.4, z: this.pos.z }, '-' + dmg, { color: '#ff4a4a', size: 26 });
+    G.fx.text({ x: this.pos.x, y: 1.4, z: this.pos.z }, '-' + dmg, { color: '#ff4a4a', size: 18 });
     G.fx.burst({ x: this.pos.x, y: 0.7, z: this.pos.z }, { count: 12, color: 0xff3030, speed: 3, life: 0.4, size: 0.18 });
     this.rig.play('hit'); this.rig.punch(-1.5);
     this.mfx.flash.value.set(1.2, 0.2, 0.2);
@@ -312,7 +312,7 @@ export class Player {
     this.hp = Math.min(this.maxHp, this.hp + n);
     const d = Math.round(this.hp - before);
     if (!silent && d > 0) {
-      this.G.fx.text({ x: this.pos.x, y: 1.5, z: this.pos.z }, '+' + d, { color: '#5aff7a', size: 26 });
+      this.G.fx.text({ x: this.pos.x, y: 1.5, z: this.pos.z }, '+' + d, { color: '#5aff7a', size: 18 });
     }
     this.G.ui.updateHp();
   }

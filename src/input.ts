@@ -52,20 +52,10 @@ export class Input {
 
   moveEv(e: PointerEvent) {
     if (e.pointerId !== this.pid) return;
-    let dx = e.clientX - this.ox, dy = e.clientY - this.oy;
-    const d = Math.hypot(dx, dy);
-    const R = this.radius;
-    if (d > R) {
-      // drag the base along so direction changes stay instant (feels better than a hard clamp)
-      const k = (d - R) / d;
-      this.ox += dx * k; this.oy += dy * k;
-      dx = e.clientX - this.ox; dy = e.clientY - this.oy;
-      this.base.style.left = this.ox - R + 'px';
-      this.base.style.top = this.oy - R + 'px';
-    }
-    this.setKnob(dx, dy);
+    this.setKnob(e.clientX - this.ox, e.clientY - this.oy);
   }
 
+  /** The base stays where the finger first touched; the knob never leaves the base's rim. */
   setKnob(dx: number, dy: number) {
     const R = this.radius;
     const d = Math.hypot(dx, dy);
@@ -75,7 +65,8 @@ export class Input {
       const m = Math.min(1, (d - dead) / (R * 0.6 - dead));
       this.x = dx / d * m; this.y = dy / d * m; this.mag = m;
     }
-    this.knob.style.transform = `translate(${dx}px, ${dy}px)`;
+    const k = d > R ? R / d : 1;
+    this.knob.style.transform = `translate(${dx * k}px, ${dy * k}px)`;
   }
 
   up(e: PointerEvent) {
@@ -90,9 +81,12 @@ export class Input {
     this.base.classList.remove('on');
   }
 
-  /** Returns current move vector {x, y, mag}. */
+  private out: MoveInput = { x: 0, y: 0, mag: 0 };
+  /** Current move vector {x, y, mag}. The same object is reused every call: read it right away. */
   read(): MoveInput {
-    if (!this.enabled) return { x: 0, y: 0, mag: 0 };
-    return { x: this.x, y: this.y, mag: this.mag };
+    const o = this.out;
+    if (!this.enabled) { o.x = 0; o.y = 0; o.mag = 0; }
+    else { o.x = this.x; o.y = this.y; o.mag = this.mag; }
+    return o;
   }
 }

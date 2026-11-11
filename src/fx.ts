@@ -172,7 +172,10 @@ class Particles {
       i++;
     }
     this.points.geometry.setDrawRange(0, this.n);
-    this.pa.needsUpdate = true; this.ca.needsUpdate = true; this.sa.needsUpdate = true;
+    // upload only the live part of each buffer
+    this.pa.clearUpdateRanges(); this.pa.addUpdateRange(0, this.n * 3); this.pa.needsUpdate = true;
+    this.ca.clearUpdateRanges(); this.ca.addUpdateRange(0, this.n * 4); this.ca.needsUpdate = true;
+    this.sa.clearUpdateRanges(); this.sa.addUpdateRange(0, this.n); this.sa.needsUpdate = true;
   }
   copy(from: number, to: number) {
     for (let c = 0; c < 3; c++) {
@@ -220,6 +223,24 @@ void main(){
   vec3 c = mix(uColor * 1.6, vec3(1.0, 0.95, 0.85), core * 0.3);
   gl_FragColor = vec4(c * a, a);
 }`;
+
+// Effect materials are made by these helpers only, so prewarm() can build the exact same shaders.
+function teleMaterial(color: THREE.ColorRepresentation, mode: number, halfAngle: number) {
+  return new THREE.ShaderMaterial({
+    vertexShader: TELE_VERT, fragmentShader: TELE_FRAG, transparent: true, depthWrite: false,
+    uniforms: { uColor: { value: new THREE.Color(color) }, uProg: { value: 0 }, uMode: { value: mode }, uAngle: { value: halfAngle }, uAlpha: { value: 1 } },
+  });
+}
+function arcMaterial(color: THREE.ColorRepresentation) {
+  return new THREE.ShaderMaterial({
+    vertexShader: TELE_VERT, fragmentShader: ARC_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    uniforms: { uColor: { value: new THREE.Color(color) }, uT: { value: 0 }, uSweep: { value: 0 } },
+  });
+}
+/** Flat additive colour, both sides: stab streaks and lightning ribbons. */
+function streakMaterial(color: THREE.ColorRepresentation, opacity: number) {
+  return new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+}
 
 function arcGeometry(inner: number, outer: number, angle: number, seg = 20) {
   const g = new THREE.BufferGeometry();
@@ -301,6 +322,34 @@ export class FX {
     this.norm.mat.uniforms.uScale.value = s;
   }
 
+  /**
+   * Compile every shader the effects (and `extra` objects) use, once, at load time.
+   * Short-lived effects dispose their materials; when the last user of a shader goes away,
+   * three.js drops the compiled program and the next slash would compile it again mid-fight.
+   * The sample objects made here are never disposed, so every program stays alive.
+   */
+  prewarm(renderer: THREE.WebGLRenderer, camera: THREE.Camera, extra: THREE.Object3D[], target: THREE.WebGLRenderTarget) {
+    const keep = new THREE.Group();
+    keep.add(
+      new THREE.Mesh(this.planeGeo, teleMaterial(0xffffff, 0, 1)),
+      new THREE.Mesh(this.planeGeo, arcMaterial(0xffffff)),
+      new THREE.Mesh(this.planeGeo, streakMaterial(0xffffff, 1)),
+      ...extra,
+    );
+    keep.traverse((o) => { o.frustumCulled = false; });
+    // Draw everything once, inside the real scene (same lights) and into the post-processing
+    // target (same colour/tone settings as every frame), so shaders compile and models upload now.
+    const prev = renderer.getRenderTarget();
+    this.scene.add(keep);
+    renderer.setRenderTarget(target);
+    renderer.compile(this.scene, camera);
+    renderer.render(this.scene, camera);
+    renderer.setRenderTarget(prev);
+    this.scene.remove(keep);
+    this.warm = keep; // never disposed: keeps one user of every shader alive
+  }
+  warm: THREE.Group | null = null;
+
   // ---- particles ----
   burst(p: XYZ, o: BurstOpts = {}) {
     const {
@@ -370,10 +419,7 @@ export class FX {
 
   /** Ground danger telegraph. shape: circle|sector|rect. Returns item; progress fills over `time`. */
   telegraph({ shape = 'circle', pos, dir = { x: 0, z: 1 }, radius = 1, angle = 1, length = 3, width = 1, time = 0.6, color = 0xff2a2a, follow = null }: TelegraphOpts) {
-    const mat = new THREE.ShaderMaterial({
-      vertexShader: TELE_VERT, fragmentShader: TELE_FRAG, transparent: true, depthWrite: false,
-      uniforms: { uColor: { value: new THREE.Color(color) }, uProg: { value: 0 }, uMode: { value: shape === 'circle' ? 0 : shape === 'sector' ? 1 : 2 }, uAngle: { value: angle / 2 }, uAlpha: { value: 1 } },
-    });
+    const mat = teleMaterial(color, shape === 'circle' ? 0 : shape === 'sector' ? 1 : 2, angle / 2);
     let geo;
     if (shape === 'rect') { geo = new THREE.PlaneGeometry(width, length).rotateX(-Math.PI / 2).translate(0, 0, -length / 2); }
     else { geo = this.planeGeo; }
@@ -396,10 +442,7 @@ export class FX {
   /** Melee slash arc around p, facing dir. */
   arc(p: XZ, dir: XZ, { radius = 1.8, inner = 0.4, angle = 2.2, color = 0xffffff as THREE.ColorRepresentation, life = 0.22, y = 0.55, flip = false, tilt = 0 } = {}) {
     const geo = arcGeometry(inner, radius, angle);
-    const mat = new THREE.ShaderMaterial({
-      vertexShader: TELE_VERT, fragmentShader: ARC_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-      uniforms: { uColor: { value: new THREE.Color(color) }, uT: { value: 0 }, uSweep: { value: 0 } },
-    });
+    const mat = arcMaterial(color);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(p.x, y, p.z);
     mesh.rotation.y = Math.atan2(dir.x, dir.z);
@@ -418,7 +461,7 @@ export class FX {
     const shape = new THREE.Shape();
     shape.moveTo(-width / 2, 0); shape.lineTo(0, length); shape.lineTo(width / 2, 0); shape.lineTo(0, -0.15);
     const geo = new THREE.ShapeGeometry(shape).rotateX(Math.PI / 2);
-    const mat = new THREE.MeshBasicMaterial({ map: null, color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    const mat = streakMaterial(color, 1);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(p.x, y, p.z);
     mesh.rotation.y = Math.atan2(dir.x, dir.z);
@@ -455,8 +498,7 @@ export class FX {
       }
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
-      const m = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: op, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
-      return new THREE.Mesh(g, m);
+      return new THREE.Mesh(g, streakMaterial(col, op));
     };
     const grp = new THREE.Group();
     const glow = build(width * 3, color, 0.45), core = build(width * 0.7, 0xffffff, 1);

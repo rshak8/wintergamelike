@@ -4,7 +4,10 @@ import type { Game } from './game';
 
 const $ = (html: string) => { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstChild as HTMLElement; };
 
-export interface HintOpts { hand?: boolean; time?: number; warn?: boolean; stop?: boolean }
+export interface HintOpts { time?: number; warn?: boolean; stop?: boolean; second?: string; low?: boolean }
+
+/** A see-through hole in the spotlight overlay, in screen pixels. */
+export interface SpotHole { x: number; y: number; r: number }
 
 export class UI {
   icons: Record<string, string>;
@@ -20,15 +23,18 @@ export class UI {
   wcardEl: HTMLElement;
   wbtn: HTMLButtonElement;
   vig: HTMLElement; fadeEl: HTMLElement;
+  spotEl: HTMLElement;
   hintT?: ReturnType<typeof setTimeout>;
   lagT?: ReturnType<typeof setTimeout>;
   tipT?: ReturnType<typeof setTimeout>;
+  toastUntil = 0; // while a toast is on screen
 
   constructor(icons: Record<string, string>, heroIcon: string) {
     this.icons = icons; this.heroIcon = heroIcon;
     this.hud = document.getElementById('hud')!;
     this.overlay = document.getElementById('overlay')!;
     this.hud.innerHTML = `
+      <div class="spot"></div>
       <div class="top-left">
         <div class="portrait" style="background-image:url(${heroIcon})"></div>
         <div class="bars">
@@ -41,7 +47,8 @@ export class UI {
       </div>
       <div class="rooms"></div>
       <div class="boss"><div class="bname"></div><div class="bbar"><i></i><em></em></div></div>
-      <div class="hint"><span></span><div class="hand"></div></div>
+      <div class="hint"><span></span><em></em></div>
+      <div class="hand-tut"><div class="ht-base"></div><div class="ht-move"><div class="ht-knob"></div><div class="ht-hand"></div></div></div>
       <div class="toast"><b></b><small></small></div>
       <div class="wcard"></div>
       <button class="weapon-btn" aria-label="Swap weapon">
@@ -63,6 +70,7 @@ export class UI {
     this.wcardEl = q('.wcard');
     this.wbtn = q<HTMLButtonElement>('.weapon-btn');
     this.vig = q('.vignette'); this.fadeEl = q('.fade');
+    this.spotEl = q('.spot');
     let rh = '';
     for (let i = 1; i <= 6; i++) rh += `<div class="rdot ${i === 6 ? 'skull' : ''}" data-i="${i}">${i === 6 ? '☠' : ''}</div>${i < 6 ? '<div class="rline"></div>' : ''}`;
     this.roomsEl.innerHTML = rh;
@@ -116,11 +124,32 @@ export class UI {
   /** The room progress bar is hidden while a fight is on. */
   showRooms(on: boolean) { this.roomsEl.classList.toggle('hidden', !on); }
 
-  hint(text: string, { hand = false, time = 0, warn = false, stop = false }: HintOpts = {}) {
+  /**
+   * Wordless "how to move" tutorial: a hand pushing a ghost joystick around.
+   * While it shows, the room bar and the weapon button stay hidden.
+   */
+  handTutorial(on: boolean) {
+    this.hud.querySelector('.hand-tut')!.classList.toggle('show', on);
+    this.hud.classList.toggle('tut', on);
+  }
+
+  /** Center-screen hint; `second` is an optional emphasized second line. */
+  hint(text: string, { time = 0, warn = false, stop = false, second = '', low = false }: HintOpts = {}) {
+    // never stack a hint on top of a room title: fade the title out first
+    if (performance.now() < this.toastUntil) { this.toastEl.classList.add('out'); this.toastUntil = 0; }
     this.hintEl.querySelector('span')!.textContent = text;
-    this.hintEl.className = 'hint show' + (hand ? ' with-hand' : '') + (warn ? ' warn' : '') + (stop ? ' stop' : '');
+    this.hintEl.querySelector('em')!.textContent = second;
+    this.hintEl.className = 'hint show' + (warn ? ' warn' : '') + (stop ? ' stop' : '') + (low ? ' low' : '');
     clearTimeout(this.hintT);
     if (time) this.hintT = setTimeout(() => this.hintEl.classList.remove('show'), time * 1000);
+  }
+
+  /** Darken the whole screen except two round windows (the hero and one enemy). */
+  spotlight(on: boolean) { this.spotEl.classList.toggle('on', on); }
+  setSpot(hero: SpotHole, enemy: SpotHole) {
+    const s = this.spotEl.style;
+    s.setProperty('--hx', hero.x + 'px'); s.setProperty('--hy', hero.y + 'px'); s.setProperty('--hr', hero.r + 'px');
+    s.setProperty('--ex', enemy.x + 'px'); s.setProperty('--ey', enemy.y + 'px'); s.setProperty('--er', enemy.r + 'px');
   }
 
   /** Small label right above the weapon button; fades out by itself (or when the button is tapped). */
@@ -133,10 +162,12 @@ export class UI {
   hideWeaponTip() { clearTimeout(this.tipT); this.wbtn.classList.remove('tip', 'pulse'); }
   hideHint() { this.hintEl.classList.remove('show'); }
 
-  toast(title: string, sub = '') {
+  toast(title: string, sub = '', style: '' | 'white' = '') {
     this.toastEl.querySelector('b')!.textContent = title;
     this.toastEl.querySelector('small')!.textContent = sub;
-    this.toastEl.classList.remove('show'); void this.toastEl.offsetWidth; this.toastEl.classList.add('show');
+    this.toastEl.classList.toggle('white', style === 'white');
+    this.toastEl.classList.remove('show', 'out'); void this.toastEl.offsetWidth; this.toastEl.classList.add('show');
+    this.toastUntil = performance.now() + 1900; // matches the .toast.show animation
   }
 
   weaponCard(id: WeaponId) {
@@ -164,11 +195,11 @@ export class UI {
 
   buffChoice(keys: BuffId[], cb: (k: BuffId) => void) {
     audio.play('chestOpen');
-    const el = $(`<div class="modal buffs-modal"><h2>CHOOSE A BLESSING</h2><div class="cards"></div></div>`);
+    const el = $(`<div class="modal buffs-modal"><h2><span>CHOOSE A</span><em>BLESSING</em></h2><div class="cards"></div></div>`);
     const cards = el.querySelector('.cards')!;
     keys.forEach((k, i) => {
       const b = BUFFS[k];
-      const c = $(`<button class="card" style="--c:${b.color};--d:${i * 0.08}s"><div class="ico">${b.icon}</div><b>${b.name}</b><small>${b.desc}</small></button>`);
+      const c = $(`<button class="card" style="--c:${b.color};--d:${i * 0.08}s"><div class="ico">${b.icon}</div><b>${b.name}</b></button>`);
       c.addEventListener('pointerdown', (e) => {
         e.stopPropagation();
         audio.play('ui');

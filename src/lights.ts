@@ -35,34 +35,48 @@ export class LightPool {
   add(src: LightSource) { if (!this.sources.includes(src)) this.sources.push(src); return src; }
   remove(src: LightSource) { const i = this.sources.indexOf(src); if (i >= 0) this.sources.splice(i, 1); }
 
-  update(dt: number, time: number, focus: THREE.Vector3) {
-    // pick the strongest nearby sources
-    const scored: { s: LightSource; score: number }[] = [];
+  // reused every frame (no per-frame allocations): the best sources and their scores, best first
+  private want: LightSource[] = [];
+  private wantScore: number[] = [];
+
+  /** Fill `want` with the strongest sources near focus (closest first, brighter ones win ties). */
+  private pick(focus: THREE.Vector3) {
+    const want = this.want, score = this.wantScore, max = this.slots.length;
+    want.length = 0; score.length = 0;
     for (const s of this.sources) {
       if (s.intensity <= 0.01) continue;
       const d2 = (s.x - focus.x) ** 2 + (s.z - focus.z) ** 2;
       if (d2 > 15 * 15) continue;
-      scored.push({ s, score: d2 - s.intensity * 0.6 });
+      const sc = d2 - s.intensity * 0.6;
+      if (want.length === max && sc >= score[max - 1]) continue;
+      // insertion into a short sorted list
+      let i = Math.min(want.length, max - 1);
+      if (want.length < max) { want.push(s); score.push(sc); }
+      while (i > 0 && score[i - 1] > sc) { want[i] = want[i - 1]; score[i] = score[i - 1]; i--; }
+      want[i] = s; score[i] = sc;
     }
-    scored.sort((a, b) => a.score - b.score);
-    const want = new Set(scored.slice(0, this.slots.length).map((o) => o.s));
+  }
+
+  update(dt: number, time: number, focus: THREE.Vector3) {
+    this.pick(focus);
+    const want = this.want;
 
     const fade = Math.min(1, dt * 5);
     for (const slot of this.slots) {
-      if (slot.src && !want.has(slot.src)) {
+      if (!slot.src) continue;
+      const i = want.indexOf(slot.src);
+      if (i < 0) {
         slot.w -= fade;
         if (slot.w <= 0) { slot.src = null; slot.w = 0; }
-      } else if (slot.src) {
+      } else {
         slot.w = Math.min(1, slot.w + fade);
-        want.delete(slot.src);
+        want.splice(i, 1); this.wantScore.splice(i, 1); // already has a light
       }
     }
     // hand free lights to sources that still need one
     for (const slot of this.slots) {
-      if (slot.src || !want.size) continue;
-      const s = want.values().next().value!;
-      want.delete(s);
-      slot.src = s; slot.w = 0;
+      if (slot.src || !want.length) continue;
+      slot.src = want.shift()!; slot.w = 0;
     }
     for (const slot of this.slots) {
       const l = slot.light, s = slot.src;

@@ -71,25 +71,56 @@ button { font-family: var(--font); pointer-events: auto; border: 0; cursor: poin
 /* tutorial hint */
 .hint { position: absolute; left: 50%; top: 40%; transform: translate(-50%, 10px) scale(.9); opacity: 0; transition: all .3s cubic-bezier(.2,1.5,.4,1); text-align: center; pointer-events: none; }
 .hint.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
-.hint span { display: inline-block; font-weight: 900; font-size: 24px; color: #fff; white-space: nowrap; animation: breathe 1.2s infinite ease-in-out; }
+.hint span { display: inline-block; font-weight: 900; font-size: 20px; color: #fff; white-space: nowrap; animation: breathe 1.2s infinite ease-in-out; }
+.hint em { display: block; font-style: normal; font-weight: 900; font-size: 24px; line-height: 1.05; color: #ff4a4a; white-space: nowrap; letter-spacing: .5px; animation: breathe 1.2s infinite ease-in-out;
+  text-shadow: 0 2px 0 var(--ink), 2px 0 0 var(--ink), -2px 0 0 var(--ink), 0 -2px 0 var(--ink), 0 0 14px rgba(255, 60, 60, .55); }
+.hint em:empty { display: none; }
+.hint.low { top: 73%; } /* under the hero, clear of the spotlight windows */
 .hint.warn span { color: #ff6a5a; }
-.hint.stop span { color: var(--gold); }
+
+/* spotlight: darken everything except round windows on the hero and one enemy (positions set from JS) */
+.spot { position: absolute; inset: 0; pointer-events: none; background: rgba(4, 6, 14, .74); opacity: 0; transition: opacity .3s;
+  --hx: 50%; --hy: 60%; --hr: 90px; --ex: 50%; --ey: 40%; --er: 90px;
+  -webkit-mask-image: radial-gradient(circle var(--hr) at var(--hx) var(--hy), transparent 55%, #000 100%), radial-gradient(circle var(--er) at var(--ex) var(--ey), transparent 55%, #000 100%);
+  mask-image: radial-gradient(circle var(--hr) at var(--hx) var(--hy), transparent 55%, #000 100%), radial-gradient(circle var(--er) at var(--ex) var(--ey), transparent 55%, #000 100%);
+  -webkit-mask-composite: source-in; mask-composite: intersect; }
+.spot.on { opacity: 1; }
 @keyframes breathe { 50% { transform: scale(1.06); } }
-.hint .hand { display: none; width: 56px; height: 56px; margin: 16px auto 0; position: relative; }
-.hint.with-hand .hand { display: block; animation: drag 1.6s infinite ease-in-out; }
-.hint .hand::before { content: '👆'; font-size: 46px; position: absolute; left: 0; top: 0; filter: drop-shadow(0 3px 0 rgba(0,0,0,.6)); }
-@keyframes drag { 0% { transform: translate(-40px, 0); } 50% { transform: translate(40px, -10px); } 100% { transform: translate(-40px, 0); } }
+/* hand tutorial: a ghost joystick whose stick a hand pushes around */
+.hand-tut { position: absolute; left: 50%; top: 81%; width: 116px; height: 116px; margin: -58px 0 0 -58px; pointer-events: none; opacity: 0; transition: opacity .35s; }
+.hand-tut.show { opacity: 1; }
+.ht-base { position: absolute; inset: 0; border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,255,255,.06) 40%, rgba(255,255,255,.14) 70%, rgba(255,255,255,.04) 72%);
+  border: 3px solid rgba(255, 255, 255, .28); box-shadow: 0 0 0 2px rgba(0,0,0,.35) inset; }
+.ht-move { position: absolute; left: 50%; top: 50%; width: 0; height: 0; animation: htmove 2.6s infinite ease-in-out; }
+.ht-knob { position: absolute; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff, #c8d2ff 45%, #7a88c8); box-shadow: 0 3px 0 rgba(0,0,0,.4), 0 0 14px rgba(160,180,255,.5); }
+.ht-hand { position: absolute; left: -21px; top: -4px; font-size: 46px; line-height: 1; filter: drop-shadow(0 3px 0 rgba(0,0,0,.6)); }
+.ht-hand::before { content: '👆'; }
+@keyframes htmove {
+  0%, 8%, 100% { translate: 0 0; }
+  24% { translate: 0 -34px; }
+  44% { translate: 34px 0; }
+  64% { translate: 0 34px; }
+  84% { translate: -34px 0; }
+}
+.landscape .hand-tut { top: 76%; }
+/* during the hand tutorial only the joystick hint is on screen */
+#hud.tut .rooms, #hud.tut .weapon-btn { opacity: 0; pointer-events: none; }
 
 /* toast */
 .toast { position: absolute; left: 50%; top: max(25%, calc(env(safe-area-inset-top) + 190px)); transform: translate(-50%, -50%); text-align: center; opacity: 0; pointer-events: none; }
 .toast b { display: block; font-size: 34px; font-weight: 900; color: var(--gold); letter-spacing: 1px; }
 .toast small { display: block; font-size: 15px; font-weight: 700; color: #dfe6ff; text-shadow: 0 2px 0 var(--ink); margin-top: 2px; }
+.toast.white b { color: #fff; }
 .toast.show { animation: toast 1.9s forwards; }
+.toast.show.out { animation: toastout .2s forwards; }
+@keyframes toastout { from { opacity: 1; transform: translate(-50%, -50%); } to { opacity: 0; transform: translate(-50%, -62%); } }
 @keyframes toast { 0% { opacity: 0; transform: translate(-50%, -50%) scale(1.8); } 12% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 80% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 100% { opacity: 0; transform: translate(-50%, -70%) scale(.95); } }
 
 /* weapon button */
 .weapon-btn { position: absolute; right: max(14px, env(safe-area-inset-right)); bottom: max(22px, calc(env(safe-area-inset-bottom) + 14px)); width: 72px; height: 72px; border-radius: 50%;
-  background: radial-gradient(circle at 50% 35%, #2c3560, #151a30 70%); border: 4px solid var(--wc, #cfd3dd); box-shadow: 0 4px 0 var(--ink), 0 0 18px color-mix(in srgb, var(--wc, #fff) 40%, transparent); transition: transform .1s; }
+  background: radial-gradient(circle at 50% 35%, #2c3560, #151a30 70%); border: 4px solid var(--wc, #cfd3dd); box-shadow: 0 4px 0 var(--ink), 0 0 18px color-mix(in srgb, var(--wc, #fff) 40%, transparent); transition: transform .1s, opacity .35s; }
 .weapon-btn.press { transform: scale(.9); }
 .weapon-btn.flash { animation: wflash .4s; }
 @keyframes wflash { 30% { transform: scale(1.18) rotate(-8deg); } }
@@ -134,13 +165,20 @@ button { font-family: var(--font); pointer-events: auto; border: 0; cursor: poin
 .modal { position: absolute; inset: 0; pointer-events: auto; background: rgba(6, 8, 16, .72); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; animation: fadein .25s; }
 .modal.closing { animation: fadeout .38s forwards; }
 @keyframes fadein { from { opacity: 0; } } @keyframes fadeout { to { opacity: 0; } }
-.buffs-modal h2 { margin: 0; font-size: 26px; font-weight: 900; color: var(--gold); letter-spacing: 1px; }
+.buffs-modal h2 { margin: 0; padding: 0 16px; text-align: center; line-height: 1.05; font-weight: 900; letter-spacing: 1px; }
+.buffs-modal h2 span { display: block; font-size: 24px; color: #fff; }
+/* holy gold: a bright glint sweeps across the word, with a soft glow around it */
+.buffs-modal h2 em { display: block; font-style: normal; font-size: 40px; text-shadow: none; color: transparent;
+  background: linear-gradient(100deg, #c08a1e 0%, #ffd24a 32%, #fffbe6 46%, #ffd24a 60%, #c08a1e 100%) 0 0 / 250% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  filter: drop-shadow(0 2px 0 var(--ink)) drop-shadow(0 0 12px rgba(255, 214, 90, .65));
+  animation: holy 2.4s linear infinite; }
+@keyframes holy { from { background-position: 100% 0; } to { background-position: -150% 0; } }
 .cards { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; padding: 0 12px; }
-.card { width: 104px; height: 150px; border-radius: 14px; background: linear-gradient(180deg, #232a4c, #141830); border: 3px solid var(--c); box-shadow: 0 5px 0 var(--ink), 0 0 20px color-mix(in srgb, var(--c) 35%, transparent); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 8px; animation: cardin .45s var(--d) both cubic-bezier(.2,1.5,.4,1); }
+.card { width: 104px; height: 124px; border-radius: 14px; background: linear-gradient(180deg, #232a4c, #141830); border: 3px solid var(--c); box-shadow: 0 5px 0 var(--ink), 0 0 20px color-mix(in srgb, var(--c) 35%, transparent); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 8px; animation: cardin .45s var(--d) both cubic-bezier(.2,1.5,.4,1); }
 @keyframes cardin { from { transform: translateY(60px) scale(.6) rotate(-6deg); opacity: 0; } }
 .card .ico { font-size: 34px; color: var(--c); filter: drop-shadow(0 0 8px var(--c)); }
 .card b { font-size: 15px; font-weight: 900; color: var(--c); }
-.card small { font-size: 12px; font-weight: 700; color: #dfe6ff; text-align: center; }
 .card:active { transform: scale(.94); }
 .card.picked { animation: picked .38s forwards; }
 @keyframes picked { 40% { transform: scale(1.2); } 100% { transform: scale(1.4); opacity: 0; } }
@@ -172,7 +210,7 @@ button { font-family: var(--font); pointer-events: auto; border: 0; cursor: poin
   .weapon-btn { width: 62px; height: 62px; }
   .ps-hero { width: 100px; height: 100px; }
   .ps-logo { font-size: 28px; } .ps-logo span { font-size: 36px; }
-  .card { height: 130px; }
+  .card { height: 112px; }
 }
 
 /* desktop preview: the phone-only game inside a phone-shaped frame */
